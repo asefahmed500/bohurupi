@@ -1,0 +1,93 @@
+# Bohurupi — full stack (PRD §7)
+#   web: Next.js UI          -> http://localhost:3000
+#   api: FastAPI + LangGraph -> http://localhost:8000
+#   worker: ARQ TTS jobs
+#   postgres + redis
+#
+# CPU profile by default (Kokoro ONNX + edge-tts + faster-whisper).
+# Set ZAI_API_KEY in .env before `docker compose up`.
+
+name: bohurupi
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: bohurupi
+      POSTGRES_PASSWORD: bohurupi
+      POSTGRES_DB: bohurupi
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bohurupi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://bohurupi:bohurupi@postgres:5432/bohurupi
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_PATH: /data/storage
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      - api_storage:/data/storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  worker:
+    build:
+      context: ./api
+    command: ["uv", "run", "arq", "app.workers.tasks.WorkerSettings"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://bohurupi:bohurupi@postgres:5432/bohurupi
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_PATH: /data/storage
+    volumes:
+      - api_storage:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  pgdata:
+  redisdata:
+  api_storage:

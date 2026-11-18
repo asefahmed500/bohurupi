@@ -1,0 +1,110 @@
+# Bohurupi — বহুরূপী
+
+**Ask or speak in any language. Get the answer spoken back in the language and voice you choose.**
+
+Bohurupi is a multilingual voice agent: type or talk in any language, the agent reasons with
+Z.AI GLM, replies in your chosen output language, and speaks the answer in any voice from a
+preset library — or a cloned voice gated by explicit consent. Every generated audio carries an
+identifiable watermark.
+
+| Piece    | Tech                                                                 |
+| -------- | -------------------------------------------------------------------- |
+| Frontend | Next.js 16 (App Router, React 19), Tailwind CSS v4, shadcn/ui, Inter + Noto script fonts |
+| Backend  | Python 3.12, FastAPI, LangGraph, SQLModel + Alembic, Redis + ARQ      |
+| Speech   | Kokoro-82M (ONNX, CPU) + edge-tts (coverage), faster-whisper (STT)    |
+| LLM      | Z.AI GLM (`glm-4.6`) via OpenAI-compatible endpoint — provider-pluggable |
+| Infra    | Docker Compose: web / api / worker / postgres / redis                 |
+
+## Quick start (Docker)
+
+```bash
+cp .env.example .env
+# edit .env: set ZAI_API_KEY and JWT_SECRET
+docker compose up --build
+# web  -> http://localhost:3000
+# api  -> http://localhost:8000  (docs at /docs in dev)
+```
+
+## Quick start (dev, no Docker)
+
+**API** (needs Python 3.12 via [uv](https://docs.astral.sh/uv/)):
+
+```bash
+cd api
+uv sync --extra audio          # core + speech stack
+cp .env.example .env           # set ZAI_API_KEY
+uv run uvicorn app.main:app --port 8000 --reload
+```
+
+**Web** (needs Node 20+):
+
+```bash
+cd web
+npm install
+npm run dev                    # http://localhost:3000
+```
+
+The first request to a Kokoro voice auto-downloads the model (~330 MB) into
+`api/storage/models/`. `edge-tts` voices cover all 20 launch languages immediately.
+
+## Features (PRD v1.0 mapping)
+
+- **F1 Chat agent** — text in, streamed text + audio out (`/ws/chat/{conv_id}`)
+- **F2 Speech input** — mic recording → faster-whisper STT with auto language ID
+- **F3 Output language** — auto / fixed / per message, 20 launch languages, RTL aware
+- **F4 Voice library** — presets by language/gender/style + my voices
+- **F5 Voice switcher** — “Change voice” on any reply; re-speak uses cached translation (no LLM)
+- **F6 Voice cloning** — 10–30 s sample with consent phrase (typed + recorded), moderation, encrypted storage
+- **F7 Voice-to-voice** — toggle in chat; speak, hear the reply
+- **F8 Style controls** — Voice Studio: speed, pitch, emotion, Clean/Radio/Hall effects
+- **F9 Engine fallback** — quality-ordered registry with circuit breaker; UI shows which voice spoke
+- **F10 Export** — every reply downloadable as WAV
+- **F13 Watermark + consent log** — audioseal when the `fx` extra is installed, metadata mark always; consent rows with IP
+
+## Architecture
+
+```
+Browser (Next.js + shadcn/ui)
+   │  REST + WebSocket (text tokens + PCM audio frames)
+FastAPI ── auth / rate limits / quotas
+   │
+LangGraph: detect → reason (GLM + tools) → translate
+   │  sentence scheduler (first audio < first reply)
+Engine Registry: Kokoro → edge-tts (circuit breaker, health, fallback)
+   │
+Postgres/SQLite · Redis (cache, quotas) · ARQ worker · storage/audio + samples (encrypted)
+```
+
+## Repository layout
+
+```
+web/    Next.js app — src/app routes, src/components/chat, src/lib (api, ws, audio engine)
+api/    FastAPI — app/agent (LangGraph), app/engines (registry), app/audio (stt, fx, watermark),
+        app/api (routers), app/db (SQLModel + db/migrations), app/workers (ARQ)
+docker-compose.yml   full stack
+.env.example         all configuration
+```
+
+## Testing
+
+```bash
+cd api && uv run pytest          # 35 tests: textprep, registry fallback, consent, API
+cd web && npm run build          # typed + production build
+```
+
+Engine smoke test: `uv run python scripts/test_tts.py` (writes WAVs to `api/storage/`).
+End-to-end: `uv run python scripts/test_e2e.py` against a running API (no LLM key needed).
+
+## Security notes
+
+- JWT auth, per-user data isolation, rate limits + daily TTS quotas per plan
+- Voice samples & consent audio encrypted at rest (Fernet, AES-CBC + HMAC)
+- Admins enable/disable engines; cloned voices pass moderation before use
+- Cloning requires the checkbox + exact phrase match + recorded consent + name/figure policy gate
+- `GET /audio/{id}/detect` (admin) checks a file for the watermark
+
+## License notes
+
+- Kokoro-82M: Apache-2.0. faster-whisper: MIT. edge-tts uses an unofficial Microsoft
+  endpoint — treat it as a convenience/coverage fallback, not the core dependency.
+- Check each added engine's license before commercial use (see PRD §2.5).

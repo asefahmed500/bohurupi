@@ -1,0 +1,80 @@
+[project]
+name = "bohurupi-api"
+version = "1.0.0"
+description = "Bohurupi - multilingual voice agent API (FastAPI + LangGraph + Z.AI GLM)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # API layer
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.17",
+    # DB
+    "sqlmodel>=0.0.24",
+    "alembic>=1.14",
+    # Settings / validation
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "email-validator>=2.2",
+    # Auth
+    "pyjwt>=2.10",
+    "bcrypt>=4.2",
+    "authlib>=1.4",
+    # Jobs / cache
+    "redis>=5.2",
+    "arq>=0.26",
+    # Observability
+    "structlog>=24.4",
+    # HTTP client (engine downloads, OAuth)
+    "httpx>=0.28",
+    # Language ID
+    "lingua-language-detector>=2.0.2",
+    # TTS coverage engine (pure python, network)
+    "edge-tts>=7.0",
+    # Agent stack (LangChain 1.0 LTS / LangGraph 1.0)
+    "langchain>=1.0,<2.0",
+    "langchain-core>=1.0,<2.0",
+    "langchain-openai>=1.0",
+    "langgraph>=1.0,<2.0",
+    "langsmith>=0.3",
+    "langchain-tavily>=0.1",
+]
+
+[project.optional-dependencies]
+# Local CPU speech stack (safe to defer; app degrades gracefully without it)
+audio = [
+    "kokoro-onnx>=0.4.2",
+    "onnxruntime>=1.20",
+    "numpy>=2.1",
+    "soundfile>=0.12.1",
+    "faster-whisper>=1.1",
+]
+# Studio effects + watermark (pulls torch; used in the full Docker profile)
+fx = [
+    "pedalboard>=0.9",
+    "audioseal>=0.1",
+    "torch>=2.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["db/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "B008", # FastAPI dependency injection uses calls in defaults by design
+    "B027", # TTSEngine.warmup is an optional hook, intentionally not abstract
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

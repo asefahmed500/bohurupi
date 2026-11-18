@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+storage/
+bohurupi.db
+*.db
+.ruff_cache/
+.pytest_cache/
+dist/
