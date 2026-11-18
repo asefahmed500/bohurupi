@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageContainer, PageHeader } from "@/components/page-container";
 
 export default function VoicesPage() {
   const { user } = useApp();
@@ -86,19 +87,17 @@ export default function VoicesPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-5xl p-4 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Voice library</h1>
-          <p className="text-sm text-muted-foreground">
-            Presets by language, gender and style — plus your own cloned voices.
-          </p>
-        </div>
-        <Button render={<Link href="/voices/clone" />}>
-          <Plus data-icon="inline-start" />
-          Clone a voice
-        </Button>
-      </div>
+    <PageContainer size="default">
+      <PageHeader
+        title="Voice library"
+        description="Presets by language, gender and style — plus your own cloned voices."
+        actions={
+          <Button render={<Link href="/voices/clone" />}>
+            <Plus data-icon="inline-start" />
+            Clone a voice
+          </Button>
+        }
+      />
 
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
         <Tabs value={tab} onValueChange={(v) => setTab(v as "presets" | "mine")}>
@@ -223,6 +222,6 @@ export default function VoicesPage() {
           </div>
         )}
       </div>
-    </div>
+    </PageContainer>
   );
 }

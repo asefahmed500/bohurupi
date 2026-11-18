@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageContainer, PageHeader } from "@/components/page-container";
 
 export default function HistoryPage() {
   const [conversations, setConversations] = React.useState<Conversation[] | null>(null);
@@ -70,11 +71,11 @@ export default function HistoryPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl p-4 sm:p-6">
-      <h1 className="text-lg font-semibold tracking-tight">History</h1>
-      <p className="text-sm text-muted-foreground">
-        Every conversation and generated audio, searchable and exportable.
-      </p>
+    <PageContainer size="default">
+      <PageHeader
+        title="History"
+        description="Every conversation and generated audio, searchable and exportable."
+      />
 
       <Input
         value={query}
@@ -137,6 +138,6 @@ export default function HistoryPage() {
           ))
         )}
       </div>
-    </div>
+    </PageContainer>
   );
 }

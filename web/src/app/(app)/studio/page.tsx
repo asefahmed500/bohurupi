@@ -33,6 +33,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { LanguagePicker } from "@/components/chat/language-picker";
 import { VoicePickerButton } from "@/components/chat/voice-picker";
+import { PageContainer, PageHeader } from "@/components/page-container";
 
 const EFFECTS = [
   { id: "clean", label: "Clean" },
@@ -139,11 +140,11 @@ export default function StudioPage() {
   }, []);
 
   return (
-    <div className="mx-auto w-full max-w-2xl p-4 sm:p-6">
-      <h1 className="text-lg font-semibold tracking-tight">Voice Studio</h1>
-      <p className="text-sm text-muted-foreground">
-        Tune speed, pitch, emotion and effects. Preview instantly.
-      </p>
+    <PageContainer size="narrow">
+      <PageHeader
+        title="Voice Studio"
+        description="Tune speed, pitch, emotion and effects. Preview instantly."
+      />
 
       <Card className="bg-gradient-card mt-4">
         <CardHeader>
@@ -276,6 +277,6 @@ export default function StudioPage() {
         Tip: the studio speaks through your latest chat conversation’s connection. Open the chat
         once after signing in, then return here.
       </p>
-    </div>
+    </PageContainer>
   );
 }

@@ -226,32 +226,37 @@ async def stream_chat(
             reply_lang = _resolve_reply_lang(final_state, out_lang, in_lang)
             reply_text = final_state.get("reply") or reply_full
 
-            ai_msg = Message(
-                conversation_id=conversation.id,
-                role="assistant",
-                text=reply_text,
-                lang=reply_lang,
-                translations=final_state.get("translations") or None,
-            )
-            session.add(ai_msg)
-            session.add(UsageEvent(user_id=user_id, type="llm", chars=len(text)))
-            session.commit()
-            session.refresh(ai_msg)
+            done_frame: dict = {
+                "type": "done",
+                "user_message_id": user_msg.id,
+                "lang": reply_lang,
+                "text": reply_text,
+                "latency_ms": int((time.monotonic() - t_start) * 1000),
+            }
 
-            conversation.updated_at = _now()
-            session.add(conversation)
-            session.commit()
+            if reply_text.strip():
+                ai_msg = Message(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    text=reply_text,
+                    lang=reply_lang,
+                    translations=final_state.get("translations") or None,
+                )
+                session.add(ai_msg)
+                session.add(UsageEvent(user_id=user_id, type="llm", chars=len(text)))
+                session.commit()
+                session.refresh(ai_msg)
 
-            await sink.put(
-                {
-                    "type": "done",
-                    "message_id": ai_msg.id,
-                    "user_message_id": user_msg.id,
-                    "lang": reply_lang,
-                    "text": reply_text,
-                    "latency_ms": int((time.monotonic() - t_start) * 1000),
-                }
-            )
+                conversation.updated_at = _now()
+                session.add(conversation)
+                session.commit()
+
+                done_frame["message_id"] = ai_msg.id
+            else:
+                # reasoning failed (e.g. LLM not configured): nothing to persist
+                done_frame["message_id"] = ""
+
+            await sink.put(done_frame)
             await sink.put(None)
 
     task = asyncio.create_task(producer())

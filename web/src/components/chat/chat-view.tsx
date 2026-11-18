@@ -1,35 +1,22 @@
 "use client";
 
-// Chat view — conversations rail, message stream, composer.
-// Desktop: conversations live in the sidebar; xl adds a voice/style panel.
-// Phone: single column, mic docked above the composer (PRD §3.3).
+// Chat view — full-bleed page (the shell provides the fixed-height flex context).
+// Desktop (xl+): chat column + voice/style side panel.
+// The conversations rail lives in the app-shell sidebar (see ConversationsGroup),
+// NOT here — one sidebar system only.
 
 import * as React from "react";
 import { Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
-import {
-  createConversation,
-  getConversation,
-  listConversations,
-  patchConversation,
-} from "@/lib/api";
+import { createConversation, getConversation, patchConversation } from "@/lib/api";
 import { useApp } from "@/lib/store";
+import { useConversations } from "@/lib/conversations";
+import { AudioStreamPlayer } from "@/lib/audio-engine";
 import { ChatSocket } from "@/lib/ws-client";
-import type { ChatMessage, Conversation, Voice } from "@/lib/types";
+import type { ChatMessage, Conversation, Voice, WsFrame } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarRail,
-} from "@/components/ui/sidebar";
+import { Label } from "@/components/ui/label";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -38,10 +25,9 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
-import { AudioStreamPlayer } from "@/lib/audio-engine";
+import { Switch } from "@/components/ui/switch";
 import { Composer } from "./composer";
 import { LanguagePicker } from "./language-picker";
 import { MessageRow } from "./message-row";
@@ -62,16 +48,15 @@ interface LiveState {
   stage?: string;
 }
 
+const EMPTY_LIVE: LiveState = { streaming: false, text: "", chunks: [] };
+
 export function ChatView() {
-  const { settings, user, updateSettings } = useApp();
-  const [conversations, setConversations] = React.useState<Conversation[]>([]);
-  const [active, setActive] = React.useState<Conversation | null>(null);
+  const { settings, updateSettings } = useApp();
+  const { activeId, setActiveId, refresh, upsert } = useConversations();
+
+  const [activeConv, setActiveConv] = React.useState<Conversation | null>(null);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
-  const [live, setLive] = React.useState<LiveState>({
-    streaming: false,
-    text: "",
-    chunks: [],
-  });
+  const [live, setLive] = React.useState<LiveState>(EMPTY_LIVE);
   const [outLang, setOutLang] = React.useState(settings.default_lang);
   const [voice, setVoice] = React.useState<Voice | null>(null);
   const [speed, setSpeed] = React.useState(settings.speed);
@@ -80,70 +65,38 @@ export function ChatView() {
 
   const socketRef = React.useRef<ChatSocket | null>(null);
   const livePlayerRef = React.useRef<AudioStreamPlayer | null>(null);
+
   // refs so the WS handler always sees current values without reconnects
-  const activeRef = React.useRef<Conversation | null>(null);
-  activeRef.current = active;
+  const activeConvRef = React.useRef<Conversation | null>(null);
+  activeConvRef.current = activeConv;
   const respeakingIdRef = React.useRef<string | null>(null);
   respeakingIdRef.current = respeakingId;
-
-  // ---- data load ----
-  const refreshConversations = React.useCallback(async () => {
-    try {
-      const res = await listConversations();
-      setConversations(res.conversations);
-      return res.conversations;
-    } catch {
-      return [];
-    }
-  }, []);
-
-  const openConversation = React.useCallback(async (conv: Conversation) => {
-    setActive(conv);
-    setLive({ streaming: false, text: "", chunks: [] });
-    socketRef.current?.close();
-    localStorage.setItem("bohurupi.active-conv", conv.id);
-    try {
-      const data = await getConversation(conv.id);
-      setMessages(data.messages.map((m) => ({ ...m, streaming: false })));
-      const sock = new ChatSocket(conv.id, {
-        onFrame: (f) => handleFrame(f),
-      });
-      socketRef.current = sock;
-      sock.connect();
-    } catch {
-      toast.error("Could not open this conversation");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  React.useEffect(() => {
-    void (async () => {
-      const convs = await refreshConversations();
-      if (convs.length > 0) void openConversation(convs[0]);
-    })();
-    return () => socketRef.current?.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const outLangRef = React.useRef(outLang);
+  outLangRef.current = outLang;
+  const speedRef = React.useRef(speed);
+  speedRef.current = speed;
+  const autoPlayRef = React.useRef(settings.auto_play);
+  autoPlayRef.current = settings.auto_play;
 
   // ---- WS frame handling ----
   const appendChunk = React.useCallback((b64: string, sr: number) => {
     setLive((prev) => {
       const next = { ...prev, chunks: [...prev.chunks, { b64, sr }] };
       if (!livePlayerRef.current) {
-        livePlayerRef.current = new AudioStreamPlayer();
-        const player = livePlayerRef.current;
-        player.setSpeed(speed);
+        const player = new AudioStreamPlayer();
+        player.setSpeed(speedRef.current);
         player.onDone(() => {
           livePlayerRef.current = null;
         });
+        livePlayerRef.current = player;
       }
-      livePlayerRef.current.playChunk(b64, sr);
+      livePlayerRef.current?.playChunk(b64, sr);
       return next;
     });
-  }, [speed]);
+  }, []);
 
   const handleFrame = React.useCallback(
-    (frame: import("@/lib/types").WsFrame) => {
+    (frame: WsFrame) => {
       switch (frame.type) {
         case "status":
           setLive((p) => ({ ...p, streaming: true, stage: frame.stage }));
@@ -160,7 +113,7 @@ export function ChatView() {
           }));
           break;
         case "audio":
-          if (settings.auto_play) appendChunk(frame.b64, frame.sr);
+          if (autoPlayRef.current) appendChunk(frame.b64, frame.sr);
           else setLive((p) => ({ ...p, chunks: [...p.chunks, { b64: frame.b64, sr: frame.sr }] }));
           break;
         case "sentence_error":
@@ -168,25 +121,25 @@ export function ChatView() {
           break;
         case "error":
           toast.error(frame.message);
-          setLive({ streaming: false, text: "", chunks: [] });
+          setLive(EMPTY_LIVE);
           break;
         case "done": {
-          // commit the live bubble into history
           const doneFrame = frame;
           livePlayerRef.current?.markComplete();
           if (respeakingIdRef.current) {
-            // respeak flow: reload messages to pick up the new audio asset
+            // re-speak flow: reload messages to pick up the new audio asset
             setRespeakingId(null);
-            if (activeRef.current) {
-              void getConversation(activeRef.current.id).then((data) =>
-                setMessages(data.messages)
-              );
+            const conv = activeConvRef.current;
+            if (conv) {
+              void getConversation(conv.id).then((data) => setMessages(data.messages));
             }
-            toast.success(`Re-spoken${doneFrame.fallback ? ` with ${doneFrame.engine} (fallback)` : ""}`);
+            toast.success(
+              `Re-spoken${doneFrame.fallback ? ` with ${doneFrame.engine} (fallback)` : ""}`
+            );
             return;
           }
-          setLive({ streaming: false, text: "", chunks: [] });
-          if (doneFrame.message_id) {
+          setLive(EMPTY_LIVE);
+          if (doneFrame.message_id && doneFrame.text) {
             setMessages((prev) => [
               ...prev.filter((m) => !(m.id.startsWith("local-") && m.text === "")),
               {
@@ -214,37 +167,100 @@ export function ChatView() {
               },
             ]);
           }
-          livePlayerRef.current?.markComplete();
-          void refreshConversations();
+          void refresh();
           return;
         }
         default:
           break;
       }
     },
-    [appendChunk, refreshConversations, settings.auto_play]
+    [appendChunk, refresh]
   );
 
-  // remove the empty placeholder user bubble when done lands (text arrives via conversation reload)
-  // — assistant bubble carries the reply; user text comes from `messages` after reload. To keep
-  // it simple we re-fetch the conversation after each done frame:
+  const handleFrameRef = React.useRef(handleFrame);
+  handleFrameRef.current = handleFrame;
 
+  const connectSocket = React.useCallback((convId: string) => {
+    if (socketRef.current) {
+      if (socketRef.current.targetId === convId) return; // already bound
+      socketRef.current.close();
+    }
+    const sock = new ChatSocket(convId, {
+      onFrame: (f) => handleFrameRef.current(f),
+    });
+    sock.targetId = convId;
+    socketRef.current = sock;
+    sock.connect();
+  }, []);
+
+  // ---- load conversation on activeId change (sidebar is the source of truth) ----
+  React.useEffect(() => {
+    // fresh-create path: send() already bound this conversation and socket —
+    // re-running the full load here would wipe the optimistic message and
+    // open a second socket (the double-connect bug).
+    if (activeConvRef.current?.id === activeId) return;
+
+    socketRef.current?.close();
+    socketRef.current = null;
+    livePlayerRef.current?.stop();
+    livePlayerRef.current = null;
+    setLive(EMPTY_LIVE);
+    setRespeakingId(null);
+
+    if (!activeId) {
+      setActiveConv(null);
+      setMessages([]);
+      localStorage.removeItem("bohurupi.active-conv");
+      return;
+    }
+    localStorage.setItem("bohurupi.active-conv", activeId);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await getConversation(activeId);
+        if (cancelled) return;
+        setActiveConv(data.conversation);
+        setMessages(data.messages);
+        if (data.conversation.default_lang && data.conversation.default_lang !== "auto") {
+          setOutLang(data.conversation.default_lang);
+        }
+        connectSocket(activeId);
+      } catch {
+        if (!cancelled) toast.error("Could not open this conversation");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, connectSocket]);
+
+  // ---- initial selection: most recent conversation ----
+  const bootstrapped = React.useRef(false);
+  React.useEffect(() => {
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+    void (async () => {
+      const convs = await refresh();
+      if (convs.length > 0) setActiveId(convs[0].id);
+    })();
+  }, [refresh, setActiveId]);
 
   // ---- actions ----
   const send = React.useCallback(
     async (text: string) => {
-      let conv = active;
+      let conv = activeConvRef.current;
       if (!conv) {
         try {
           conv = await createConversation({ default_lang: outLang });
-          setActive(conv);
+          setActiveConv(conv);
+          upsert(conv); // show in the sidebar immediately
+          setActiveId(conv.id); // highlight; the load effect skips (same conversation)
           localStorage.setItem("bohurupi.active-conv", conv.id);
         } catch {
           toast.error("Could not start a conversation");
           return;
         }
       }
-      // optimistic user bubble
       setMessages((prev) => [
         ...prev,
         {
@@ -256,31 +272,18 @@ export function ChatView() {
         },
       ]);
       setLive({ streaming: true, text: "", chunks: [], stage: "thinking" });
-      if (!socketRef.current) {
-        const sock = new ChatSocket(conv.id, { onFrame: handleFrame });
-        socketRef.current = sock;
-        sock.connect();
-        // small delay to let ws accept
-        await new Promise((r) => setTimeout(r, 150));
-      }
-      socketRef.current?.chat(text, { outLang, voiceId: voice?.id ?? "", speed });
+      connectSocket(conv.id);
+      // give the socket a tick to open if it was just created
+      await new Promise((r) => setTimeout(r, 120));
+      socketRef.current?.chat(text, {
+        outLang,
+        voiceId: voice?.id ?? "",
+        speed,
+      });
     },
-    [active, outLang, voice, speed, handleFrame]
+    [connectSocket, outLang, setActiveId, speed, upsert, voice]
   );
 
-  const newConversation = async () => {
-    socketRef.current?.close();
-    socketRef.current = null;
-    setActive(null);
-    setMessages([]);
-    setLive({ streaming: false, text: "", chunks: [] });
-    localStorage.removeItem("bohurupi.active-conv");
-  };
-
-  const outLangRef = React.useRef(outLang);
-  outLangRef.current = outLang;
-  const speedRef = React.useRef(speed);
-  speedRef.current = speed;
   const respeak = React.useCallback(
     (messageId: string, v: Voice) => {
       const sock = socketRef.current;
@@ -298,68 +301,34 @@ export function ChatView() {
     []
   );
 
+  const newConversation = () => setActiveId(null);
+
   const currentVoiceName = voice?.name ?? "Voice";
 
   return (
-    <div className="flex h-dvh min-h-dvh">
-      {/* conversations rail (md+) */}
-      <Sidebar collapsible="none" className="hidden lg:flex">
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel className="justify-between">
-              Conversations
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label="New conversation"
-                onClick={newConversation}
-              >
-                <Plus />
-              </Button>
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {conversations.slice(0, 30).map((c) => (
-                  <SidebarMenuItem key={c.id}>
-                    <SidebarMenuButton
-                      isActive={active?.id === c.id}
-                      onClick={() => void openConversation(c)}
-                    >
-                      <span className="truncate">{c.title}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-                {conversations.length === 0 && (
-                  <p className="px-2 py-1 text-xs text-muted-foreground">No conversations yet</p>
-                )}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-        <SidebarRail />
-      </Sidebar>
-
+    <div className="flex h-full min-h-0">
       {/* chat column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* header */}
+        {/* page header (chat) */}
         <header className="flex items-center gap-2 border-b bg-card/60 px-3 py-2 backdrop-blur sm:px-4">
           <Button
             size="icon-sm"
             variant="ghost"
             aria-label="New conversation"
             onClick={newConversation}
-            className="lg:hidden"
           >
             <Plus />
           </Button>
           <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">
-            {active?.title ?? "New conversation"}
+            {activeConv?.title ?? "New conversation"}
           </h1>
           <LanguagePicker
             value={outLang}
             onChange={(code) => {
               setOutLang(code);
-              if (active) void patchConversation(active.id, { default_lang: code });
+              if (activeConv) {
+                void patchConversation(activeConv.id, { default_lang: code });
+              }
             }}
             trigger={
               <Button variant="outline" size="sm" className="rounded-full">
@@ -393,7 +362,9 @@ export function ChatView() {
                         <Sparkles className="size-6 text-muted-foreground" />
                       </div>
                       <div>
-                        <h2 className="text-lg font-semibold">Speak or type in any language</h2>
+                        <h2 className="text-lg font-semibold">
+                          Speak or type in any language
+                        </h2>
                         <p className="mt-1 text-sm text-muted-foreground">
                           The reply is spoken in the language and voice you choose.
                         </p>
@@ -418,7 +389,9 @@ export function ChatView() {
                     <MessageScrollerItem key={m.id} scrollAnchor>
                       <MessageRow
                         message={m}
-                        onRespeak={m.role === "assistant" ? (v) => respeak(m.id, v) : undefined}
+                        onRespeak={
+                          m.role === "assistant" ? (v) => respeak(m.id, v) : undefined
+                        }
                         respeaking={respeakingId === m.id}
                       />
                     </MessageScrollerItem>
@@ -448,22 +421,32 @@ export function ChatView() {
           </div>
         </MessageScrollerProvider>
 
-        {/* composer */}
+        {/* composer (docks above the mobile tab bar via the shell height contract) */}
         <div className="border-t bg-card/60 px-3 pt-3 pb-3 backdrop-blur sm:px-4 md:pb-4">
           <div className="mx-auto w-full max-w-3xl">
-            <Composer onSend={(t) => void send(t)} busy={live.streaming} voiceToVoice={voiceToVoice} />
+            <Composer
+              onSend={(t) => void send(t)}
+              busy={live.streaming}
+              voiceToVoice={voiceToVoice}
+            />
             <div className="mt-2 flex items-center justify-center gap-4 text-xs text-muted-foreground md:justify-start">
               <label className="flex items-center gap-1.5">
-                <Switch checked={voiceToVoice} onCheckedChange={setVoiceToVoice} aria-label="Voice-to-voice mode" />
+                <Switch
+                  checked={voiceToVoice}
+                  onCheckedChange={setVoiceToVoice}
+                  aria-label="Voice-to-voice mode"
+                />
                 Voice-to-voice
               </label>
-              <span className="hidden sm:inline">Enter to send · Shift+Enter for newline · M to mic</span>
+              <span className="hidden sm:inline">
+                Enter to send · Shift+Enter for newline
+              </span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* voice & style panel (xl+) */}
+      {/* voice & style panel (xl+) — part of the chat page, not the shell */}
       <aside className="hidden w-72 shrink-0 flex-col gap-4 overflow-y-auto border-l bg-card/50 p-4 xl:flex">
         <div>
           <h2 className="text-sm font-semibold">Voice & style</h2>
@@ -517,8 +500,8 @@ export function ChatView() {
         </div>
         <Separator />
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Tip: open any reply and use “Change voice” to re-speak it in another
-          voice or language — the answer isn’t regenerated.
+          Tip: open any reply and use “Change voice” to re-speak it in another voice or language —
+          the answer isn’t regenerated.
         </p>
       </aside>
     </div>

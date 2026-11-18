@@ -29,6 +29,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { VoicePickerButton } from "@/components/chat/voice-picker";
 import { LanguagePicker } from "@/components/chat/language-picker";
+import { PageContainer, PageHeader } from "@/components/page-container";
 
 export default function SettingsPage() {
   const { settings, updateSettings, user } = useApp();
@@ -54,9 +55,8 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-2xl p-4 sm:p-6">
-      <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
-      <p className="text-sm text-muted-foreground">Theme, defaults, playback and privacy.</p>
+    <PageContainer size="narrow">
+      <PageHeader title="Settings" description="Theme, defaults, playback and privacy." />
 
       <div className="mt-4 flex flex-col gap-4">
         <Card className="bg-gradient-card">
@@ -219,6 +219,6 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </PageContainer>
   );
 }

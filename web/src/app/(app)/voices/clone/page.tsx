@@ -26,6 +26,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { MicButton } from "@/components/chat/mic-button";
+import { PageContainer, PageHeader } from "@/components/page-container";
 
 export default function ClonePage() {
   const router = useRouter();
@@ -139,13 +140,18 @@ export default function ClonePage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-2xl p-4 sm:p-6">
+    <PageContainer size="narrow">
       <Button variant="ghost" size="sm" className="mb-4">
         <Link href="/voices" className="flex items-center gap-1.5">
           <ArrowLeft className="size-4" />
           Voice library
         </Link>
       </Button>
+
+      <PageHeader
+        title="Clone a voice"
+        description="Consent → sample → quality check → finish. Cloned audio is watermarked and logged."
+      />
 
       {/* steps */}
       <ol className="mb-6 flex items-center gap-2">
@@ -362,6 +368,6 @@ export default function ClonePage() {
           </CardFooter>
         </Card>
       )}
-    </div>
+    </PageContainer>
   );
 }

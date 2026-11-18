@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageContainer, PageHeader } from "@/components/page-container";
 
 export default function AdminPage() {
   const { user, ready } = useApp();
@@ -116,19 +117,19 @@ export default function AdminPage() {
     : [];
 
   return (
-    <div className="mx-auto w-full max-w-5xl p-4 sm:p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Admin</h1>
-          <p className="text-sm text-muted-foreground">Engines, usage, moderation, users.</p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => void loadAll()}>
-          Refresh
-        </Button>
-      </div>
+    <PageContainer size="wide">
+      <PageHeader
+        title="Admin"
+        description="Engines, usage, moderation, users."
+        actions={
+          <Button variant="outline" size="sm" onClick={() => void loadAll()}>
+            Refresh
+          </Button>
+        }
+      />
 
       <Tabs value={tab} onValueChange={setTab} className="mt-4">
-        <TabsList>
+        <TabsList className="h-auto w-full flex-wrap">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="engines">Engines</TabsTrigger>
           <TabsTrigger value="moderation">
@@ -284,6 +285,6 @@ export default function AdminPage() {
           </CardContent>
         </Card>
       )}
-    </div>
+    </PageContainer>
   );
 }

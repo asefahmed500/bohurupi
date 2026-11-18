@@ -15,11 +15,14 @@ export class ChatSocket {
   private ws: WebSocket | null = null;
   private handlers: ChatSocketHandlers;
   private closedByUser = false;
+  /** conversation id this socket is bound to (guards against double-connects) */
+  targetId: string;
 
   constructor(
-    private conversationId: string,
+    conversationId: string,
     handlers: ChatSocketHandlers
   ) {
+    this.targetId = conversationId;
     this.handlers = handlers;
   }
 
@@ -29,7 +32,7 @@ export class ChatSocket {
     const base = API_URL.replace(/^http/, "ws");
     this.closedByUser = false;
     this.ws = new WebSocket(
-      `${base}/ws/chat/${this.conversationId}?token=${tokens.access_token}`
+      `${base}/ws/chat/${this.targetId}?token=${tokens.access_token}`
     );
     this.ws.onopen = () => this.handlers.onOpen?.();
     this.ws.onmessage = (event) => {
