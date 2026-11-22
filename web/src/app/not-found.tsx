@@ -15,7 +15,7 @@ export default function NotFound() {
           This page doesn&apos;t exist or has moved.
         </p>
       </div>
-      <Link href="/" className={buttonVariants({ variant: "outline" })}>
+      <Link href="/chat" className={buttonVariants({ variant: "outline" })}>
         Back to chat
       </Link>
     </div>

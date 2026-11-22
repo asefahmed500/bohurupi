@@ -4,19 +4,14 @@
 // voice moderation, users.
 
 import * as React from "react";
+import dynamic from "next/dynamic";
 import { toast } from "sonner";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-} from "recharts";
 
 import {
   adminEngines,
   adminPendingVoices,
   adminModerate,
+  adminPatchUser,
   adminSetEngine,
   adminStats,
   adminUsage,
@@ -29,13 +24,16 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
-import { ChartContainer } from "@/components/ui/chart";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -48,35 +46,56 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageContainer, PageHeader } from "@/components/page-container";
 
+// heavy chart (recharts) loads only when the overview renders one
+const UsageChart = dynamic(() => import("./usage-chart"), {
+  ssr: false,
+  loading: () => <Skeleton className="h-64 w-full" />,
+});
+
+type AdminUser = {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  plan: string;
+  is_active: boolean;
+  created_at: string;
+};
+
 export default function AdminPage() {
   const { user, ready } = useApp();
   const [tab, setTab] = React.useState("overview");
   const [engines, setEngines] = React.useState<EngineStatus[] | null>(null);
   const [usage, setUsage] = React.useState<Awaited<ReturnType<typeof adminUsage>> | null>(null);
   const [stats, setStats] = React.useState<Awaited<ReturnType<typeof adminStats>> | null>(null);
-  const [users, setUsers] = React.useState<Awaited<ReturnType<typeof adminUsers>> | null>(null);
+  const [users, setUsers] = React.useState<AdminUser[] | null>(null);
   const [pending, setPending] = React.useState<Voice[]>([]);
 
   const loadAll = React.useCallback(async () => {
     try {
-      const [e, u, s] = await Promise.all([adminEngines(), adminUsage(30), adminStats()]);
+      const [e, u, s, pv, usersRes] = await Promise.all([
+        adminEngines(),
+        adminUsage(30),
+        adminStats(),
+        adminPendingVoices(),
+        adminUsers(),
+      ]);
       setEngines(e.engines);
       setUsage(u);
       setStats(s);
+      setPending(pv.voices);
+      setUsers(usersRes.users);
     } catch {
       toast.error("Could not load admin data");
-    }
-    try {
-      const pv = await adminPendingVoices();
-      setPending(pv.voices);
-      setUsers(await adminUsers());
-    } catch {
-      /* non-admin */
     }
   }, []);
 
   React.useEffect(() => {
-    if (ready && user?.role === "admin") void loadAll();
+    if (ready && user?.role === "admin") {
+      // async data load kicked off from the effect — safe by construction
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void loadAll();
+    }
   }, [ready, user, loadAll]);
 
   if (!ready) return <Skeleton className="m-6 h-40 rounded-xl" />;
@@ -99,12 +118,31 @@ export default function AdminPage() {
   };
 
   const moderate = async (voiceId: string, decision: "approve" | "reject") => {
+    if (
+      decision === "reject" &&
+      !confirm("Reject this voice? The uploaded sample and consent audio are deleted permanently.")
+    ) {
+      return;
+    }
     try {
       await adminModerate(voiceId, decision);
       setPending((prev) => prev.filter((v) => v.id !== voiceId));
       toast.success(`Voice ${decision}d`);
     } catch {
       toast.error("Moderation failed");
+    }
+  };
+
+  const patchUser = async (
+    id: string,
+    patch: { role?: string; plan?: string; is_active?: boolean }
+  ) => {
+    try {
+      const updated = await adminPatchUser(id, patch);
+      setUsers((prev) => prev?.map((u) => (u.id === id ? { ...u, ...updated } : u)) ?? null);
+      toast.success("User updated");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update user");
     }
   };
 
@@ -151,36 +189,16 @@ export default function AdminPage() {
               <Card key={s.label} className="bg-gradient-card py-0">
                 <CardContent className="p-4">
                   <p className="text-xs text-muted-foreground">{s.label}</p>
-                  <p className="mt-1 text-2xl font-semibold tabular-nums">
-                    {s.value ?? <Skeleton className="h-7 w-14" />}
-                  </p>
+                  {s.value === undefined ? (
+                    <Skeleton className="mt-1 h-7 w-14" />
+                  ) : (
+                    <p className="mt-1 text-2xl font-semibold tabular-nums">{s.value}</p>
+                  )}
                 </CardContent>
               </Card>
             ))}
           </div>
-          <Card className="bg-gradient-card">
-            <CardHeader>
-              <CardTitle className="text-base">Spoken seconds (last 14 days)</CardTitle>
-              <CardDescription>Sum of synthesized audio across all users.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {chartData.length === 0 ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">No usage yet</p>
-              ) : (
-                <ChartContainer
-                  config={{ seconds: { label: "Seconds", color: "oklch(0.227 0 0)" } }}
-                  className="h-64 w-full"
-                >
-                  <BarChart data={chartData}>
-                    <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                    <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={11} />
-                    <YAxis tickLine={false} axisLine={false} fontSize={11} width={32} />
-                    <Bar dataKey="seconds" fill="oklch(0.227 0 0)" radius={4} />
-                  </BarChart>
-                </ChartContainer>
-              )}
-            </CardContent>
-          </Card>
+          <UsageChart data={chartData} />
         </div>
       )}
 
@@ -236,10 +254,10 @@ export default function AdminPage() {
                       {v.languages.join(", ")} · submitted by {v.owner_id?.slice(0, 8)}
                     </p>
                   </div>
-                  <Button size="sm" onClick={() => void moderate(v.id, "approve")}>
+                  <Button size="sm" variant="success" onClick={() => void moderate(v.id, "approve")}>
                     Approve
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => void moderate(v.id, "reject")}>
+                  <Button size="sm" variant="destructive" onClick={() => void moderate(v.id, "reject")}>
                     Reject
                   </Button>
                 </CardContent>
@@ -263,18 +281,51 @@ export default function AdminPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Plan</TableHead>
+                  <TableHead>Active</TableHead>
                   <TableHead>Joined</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users?.users.map((u) => (
-                  <TableRow key={u.id}>
+                {users?.map((u) => (
+                  <TableRow key={u.id} className={u.is_active ? undefined : "opacity-60"}>
                     <TableCell className="max-w-48 truncate">{u.email}</TableCell>
                     <TableCell>{u.name}</TableCell>
                     <TableCell>
-                      <Badge variant="outline">{u.role}</Badge>
+                      <Select
+                        value={u.role}
+                        onValueChange={(v) => v && v !== u.role && void patchUser(u.id, { role: v })}
+                      >
+                        <SelectTrigger size="sm" className="w-24 border-none shadow-none" aria-label={`Role for ${u.email}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="user">user</SelectItem>
+                          <SelectItem value="admin">admin</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </TableCell>
-                    <TableCell className="capitalize">{u.plan}</TableCell>
+                    <TableCell>
+                      <Select
+                        value={u.plan}
+                        onValueChange={(v) => v && v !== u.plan && void patchUser(u.id, { plan: v })}
+                      >
+                        <SelectTrigger size="sm" className="w-24 border-none shadow-none capitalize" aria-label={`Plan for ${u.email}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="free">free</SelectItem>
+                          <SelectItem value="pro">pro</SelectItem>
+                          <SelectItem value="studio">studio</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      <Switch
+                        checked={u.is_active}
+                        onCheckedChange={(v) => void patchUser(u.id, { is_active: v })}
+                        aria-label={`Active for ${u.email}`}
+                      />
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {new Date(u.created_at).toLocaleDateString()}
                     </TableCell>

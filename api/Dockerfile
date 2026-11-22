@@ -13,6 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock ./
+# NOTE: the 'fx' extra (pedalboard + audioseal + torch) is intentionally not
+# installed — it adds ~2 GB. Without it, Voice Studio effects and audioseal
+# watermarking degrade gracefully (metadata mark only). Add --extra fx here
+# for the full watermark/effects profile.
 RUN uv sync --frozen --no-install-project --extra audio
 
 COPY app ./app
@@ -32,7 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY --from=builder /app /app
-RUN mkdir -p /app/storage && chown -R bohurupi:bohurupi /app
+# /data/storage must exist with the right owner BEFORE the first named-volume
+# mount, or Docker creates it root-owned and the non-root user cannot write.
+RUN mkdir -p /data/storage && chown -R bohurupi:bohurupi /app /data/storage
 
 USER bohurupi
 EXPOSE 8000

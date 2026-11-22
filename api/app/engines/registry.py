@@ -29,10 +29,45 @@ class CircuitOpen(Exception):
 
 
 class Registry:
-    def __init__(self, engines: list[TTSEngine]):
+    def __init__(self, engines: list[TTSEngine], persist: bool = True):
         self.engines = sorted(engines, key=lambda e: e.quality_rank)
         self._failures: dict[str, list[float]] = {}
-        self._disabled: set[str] = set()
+        self._persist = persist  # tests opt out to avoid touching the real DB
+        self._disabled: set[str] = self._load_disabled() if persist else set()
+
+    # ---- persisted enable/disable (FR-9, survives restarts) ----
+    @staticmethod
+    def _load_disabled() -> set[str]:
+        try:
+            from sqlmodel import Session, select
+
+            from app.db.models import EngineState
+            from app.db.session import engine as db_engine
+
+            with Session(db_engine) as s:
+                rows = s.exec(select(EngineState).where(EngineState.enabled == False)).all()  # noqa: E712
+                return {r.name for r in rows}
+        except Exception:
+            return set()
+
+    @staticmethod
+    def _persist_enabled(engine_name: str, enabled: bool) -> None:
+        try:
+            from sqlmodel import Session
+
+            from app.db.models import EngineState
+            from app.db.session import engine as db_engine
+
+            with Session(db_engine) as s:
+                row = s.get(EngineState, engine_name)
+                if row is None:
+                    row = EngineState(name=engine_name, enabled=enabled)
+                else:
+                    row.enabled = enabled
+                s.add(row)
+                s.commit()
+        except Exception:
+            logger.warning("Could not persist engine state for '%s'", engine_name)
 
     # ---- health ----
     def record_failure(self, engine_name: str) -> None:
@@ -59,6 +94,8 @@ class Registry:
             self._disabled.discard(engine_name)
         else:
             self._disabled.add(engine_name)
+        if self._persist:
+            self._persist_enabled(engine_name, enabled)
 
     def is_enabled(self, engine_name: str) -> bool:
         return engine_name not in self._disabled

@@ -42,7 +42,7 @@ services:
       DATABASE_URL: postgresql+psycopg://bohurupi:bohurupi@postgres:5432/bohurupi
       REDIS_URL: redis://redis:6379/0
       STORAGE_PATH: /data/storage
-      CORS_ORIGINS: http://localhost:3000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
     volumes:
       - api_storage:/data/storage
     ports:
@@ -62,7 +62,8 @@ services:
   worker:
     build:
       context: ./api
-    command: ["uv", "run", "arq", "app.workers.tasks.WorkerSettings"]
+    # NB: run `arq` from the venv directly — the runtime image has no `uv`.
+    command: ["arq", "app.workers.tasks.WorkerSettings"]
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://bohurupi:bohurupi@postgres:5432/bohurupi
@@ -75,12 +76,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, redis; redis.Redis.from_url(os.environ['REDIS_URL']).ping()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   web:
     build:
       context: ./web
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "3000:3000"
     depends_on:

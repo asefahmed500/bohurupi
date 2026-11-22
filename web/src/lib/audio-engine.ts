@@ -2,6 +2,19 @@
 
 // Web Audio streaming player: plays a queue of base64 PCM chunks (WS frames)
 // or a full Float32 buffer, with speed control, pause/resume and position.
+//
+// All players share ONE AudioContext per document (browsers cap concurrent
+// contexts and each pins an audio render thread — perf audit finding #2).
+
+let sharedCtx: AudioContext | null = null;
+
+export function getSharedAudioContext(): AudioContext {
+  if (!sharedCtx) {
+    sharedCtx = new AudioContext();
+  }
+  if (sharedCtx.state === "suspended") void sharedCtx.resume();
+  return sharedCtx;
+}
 
 type DoneHandler = () => void;
 
@@ -13,7 +26,6 @@ interface QueuedSource {
 }
 
 export class AudioStreamPlayer {
-  private ctx: AudioContext | null = null;
   private gain: GainNode | null = null;
   private sources: QueuedSource[] = [];
   private scheduleHead = 0;
@@ -25,13 +37,12 @@ export class AudioStreamPlayer {
   private progressTimer: number | null = null;
 
   private ensureCtx() {
-    if (!this.ctx) {
-      this.ctx = new AudioContext();
-      this.gain = this.ctx.createGain();
-      this.gain.connect(this.ctx.destination);
+    const ctx = getSharedAudioContext();
+    if (!this.gain) {
+      this.gain = ctx.createGain();
+      this.gain.connect(ctx.destination);
     }
-    if (this.ctx.state === "suspended") void this.ctx.resume();
-    return this.ctx;
+    return ctx;
   }
 
   isPlaying() {
@@ -44,8 +55,8 @@ export class AudioStreamPlayer {
 
   /** Current playback position in seconds (for waveform progress). */
   position(): number {
-    if (!this.ctx || !this.playing || this.sources.length === 0) return 0;
-    const elapsed = (this.ctx.currentTime - this.startedAt) * this.speed;
+    if (!this.playing || this.sources.length === 0) return 0;
+    const elapsed = (getSharedAudioContext().currentTime - this.startedAt) * this.speed;
     return Math.max(0, Math.min(elapsed, this.seenTotal));
   }
 
@@ -55,11 +66,7 @@ export class AudioStreamPlayer {
 
   setSpeed(rate: number) {
     const clamped = Math.min(2, Math.max(0.5, rate));
-    const ctx = this.ctx;
-    if (!ctx) {
-      this.speed = clamped;
-      return;
-    }
+    const ctx = getSharedAudioContext();
     // Re-anchor the timeline so progress stays consistent after the rate change.
     const pos = this.position();
     this.speed = clamped;
@@ -147,16 +154,8 @@ export class AudioStreamPlayer {
     this.startProgress();
   }
 
-  pause() {
-    this.ctx?.suspend();
-  }
-
-  resume() {
-    void this.ctx?.resume();
-  }
-
   isPaused() {
-    return this.ctx?.state === "suspended";
+    return getSharedAudioContext().state === "suspended";
   }
 
   stop() {
@@ -215,23 +214,36 @@ export function computePeaks(pcm: Float32Array, buckets = 64): number[] {
   return peaks.map((p) => p / norm);
 }
 
-export function b64ChunksToPeaks(chunks: { b64: string; sr: number }[], buckets = 64): number[] {
-  // approximate peaks from raw int16 bytes without full decode
-  const peaks: number[] = [];
-  let all: number[] = [];
-  for (const c of chunks) {
-    const bin = atob(c.b64);
-    const stride = Math.max(2, Math.floor(bin.length / 400)) & ~1; // even stride
-    for (let i = 0; i + 1 < bin.length; i += stride) {
-      const v = Math.abs(((bin.charCodeAt(i) | (bin.charCodeAt(i + 1) << 8)) << 16) >> 16) / 32768;
-      all.push(v);
-    }
+/**
+ * Peak amplitude of ONE base64 int16 chunk. Used incrementally by the audio
+ * bar: decode each chunk once on arrival instead of re-decoding the whole
+ * reply on every WS frame (perf audit finding #5).
+ */
+export function b64ChunkMax(b64: string): number {
+  const bin = atob(b64);
+  let max = 0;
+  const stride = Math.max(2, Math.floor(bin.length / 400)) & ~1; // even stride
+  for (let i = 0; i + 1 < bin.length; i += stride) {
+    const v = Math.abs(((bin.charCodeAt(i) | (bin.charCodeAt(i + 1) << 8)) << 16) >> 16) / 32768;
+    if (v > max) max = v;
   }
-  const size = Math.max(1, Math.floor(all.length / buckets));
+  return max;
+}
+
+/** Seconds of audio in one base64 int16 mono chunk. */
+export function b64ChunkSeconds(b64: string, sampleRate: number): number {
+  const bin = atob(b64);
+  return bin.length / 2 / sampleRate;
+}
+
+/** Bucket per-chunk maxima into normalized waveform peaks. */
+export function peaksFromMaxima(maxima: number[], buckets = 64): number[] {
+  const peaks: number[] = [];
+  const size = Math.max(1, Math.floor(maxima.length / buckets));
   for (let b = 0; b < buckets; b++) {
     let max = 0;
-    for (let i = b * size; i < Math.min((b + 1) * size, all.length); i++) {
-      if (all[i] > max) max = all[i];
+    for (let i = b * size; i < Math.min((b + 1) * size, maxima.length); i++) {
+      if (maxima[i] > max) max = maxima[i];
     }
     peaks.push(max);
   }

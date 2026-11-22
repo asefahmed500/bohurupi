@@ -125,6 +125,7 @@ class KokoroEngine(TTSEngine):
 
         logger.info("Loading Kokoro ONNX model ...")
         KokoroEngine._kokoro = Kokoro(str(model_path), str(voices_path))
+        KokoroEngine._failed = False  # a later retry may succeed — recover health
         return KokoroEngine._kokoro
 
     async def synthesize(

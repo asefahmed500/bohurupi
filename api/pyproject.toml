@@ -19,6 +19,7 @@ dependencies = [
     "pyjwt>=2.10",
     "bcrypt>=4.2",
     "authlib>=1.4",
+    "itsdangerous>=2.2",  # Starlette SessionMiddleware (OAuth CSRF state)
     # Jobs / cache
     "redis>=5.2",
     "arq>=0.26",
@@ -73,6 +74,10 @@ ignore = [
     "B008", # FastAPI dependency injection uses calls in defaults by design
     "B027", # TTSEngine.warmup is an optional hook, intentionally not abstract
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# audit/verification harnesses: long one-liner requests are readable enough
+"scripts/audit_*.py" = ["E501", "E402", "F841"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -148,4 +148,8 @@ def test_languages(client):
     r = client.get("/languages")
     codes = [lang["code"] for lang in r.json()["languages"]]
     assert "bn" in codes and "en" in codes
-    assert len(codes) == 20
+    # 20 launch languages + 35 expanded library languages
+    assert len(codes) == 55
+    assert {"sv", "he", "th", "uk", "fil"} <= set(codes)
+    hebrew = next(x for x in r.json()["languages"] if x["code"] == "he")
+    assert hebrew["rtl"] is True

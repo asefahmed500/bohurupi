@@ -3,7 +3,6 @@
 // REST client: base URL, auth headers, transparent refresh-on-401.
 
 import type {
-  AudioAsset,
   ChatMessage,
   Conversation,
   EngineStatus,
@@ -125,7 +124,33 @@ export const putSettings = (patch: Partial<UserSettings>) =>
 
 export const getLanguages = () => api<{ languages: Language[] }>("/languages");
 export const getHealth = () =>
-  api<{ ok: boolean; llm: boolean; stt: boolean; engines: EngineStatus[] }>("/health");
+  api<{
+    ok: boolean;
+    llm: boolean;
+    stt: boolean;
+    oauth_google: boolean;
+    demo: boolean;
+    engines: EngineStatus[];
+  }>("/health");
+
+// ---- demo + password reset ----
+
+export const getDemoAccounts = () =>
+  api<{ email: string; name: string; label: string }[]>("/auth/demo-accounts");
+
+export const demoLogin = () => api<Tokens>("/auth/demo-login", { method: "POST" });
+
+export const forgotPassword = (email: string) =>
+  api<{ message: string; dev_token?: string | null; dev_url?: string | null }>(
+    "/auth/forgot-password",
+    { method: "POST", body: JSON.stringify({ email }) }
+  );
+
+export const resetPassword = (token: string, new_password: string) =>
+  api<{ message: string }>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, new_password }),
+  });
 
 // ---- conversations ----
 
@@ -269,9 +294,20 @@ export const adminUsers = () =>
       name: string;
       role: string;
       plan: string;
+      is_active: boolean;
       created_at: string;
     }[];
-  }>("/admin/users");
+  }>("/admin/users?limit=500");
+export const adminPatchUser = (
+  id: string,
+  patch: { role?: string; plan?: string; is_active?: boolean }
+) =>
+  api<{
+    id: string;
+    role: string;
+    plan: string;
+    is_active: boolean;
+  }>(`/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
 export const adminPendingVoices = () => api<{ voices: Voice[] }>("/admin/voices/moderation");
 export const adminModerate = (voiceId: string, decision: "approve" | "reject") =>
   api<Voice>(`/admin/voices/${voiceId}/moderate`, {

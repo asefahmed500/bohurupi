@@ -34,7 +34,7 @@ export function LanguagePicker({
       <DropdownMenuTrigger
         render={
           trigger ?? (
-            <Button variant="outline" size="sm" className="rounded-full">
+            <Button variant="outline" size="sm">
               <Languages data-icon="inline-start" />
               Reply in: {value === "auto" ? "Auto" : (current?.native ?? value)}
             </Button>
@@ -43,14 +43,14 @@ export function LanguagePicker({
       />
       <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
         <DropdownMenuLabel>Reply language</DropdownMenuLabel>
-        <DropdownMenuItem onSelect={() => onChange("auto")}>
+        <DropdownMenuItem onClick={() => onChange("auto")}>
           <span className="flex-1">Auto — mirror the user</span>
           {value === "auto" && <Check className="size-4" />}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {languages.map((l) => (
-          <DropdownMenuItem key={l.code} onSelect={() => onChange(l.code)}>
-            <span className="flex-1">
+          <DropdownMenuItem key={l.code} onClick={() => onChange(l.code)}>
+            <span className="flex-1" dir="auto">
               {l.native} <span className="text-muted-foreground">· {l.name}</span>
             </span>
             {value === l.code && <Check className="size-4" />}

@@ -18,8 +18,12 @@ def normalize(text: str) -> str:
     return text
 
 
-def split_sentences(text: str, max_chars: int = 300) -> list[str]:
-    """Split into sentences across scripts; hard-split overlong runs."""
+def split_sentences(text: str, max_chars: int = 140) -> list[str]:
+    """Split into sentences across scripts; hard-split overlong runs.
+
+    140 chars keeps time-to-first-audio low: synthesis cost scales with the
+    sentence, and LLM replies often arrive as one long run without terminal
+    punctuation."""
     text = normalize(text)
     if not text:
         return []

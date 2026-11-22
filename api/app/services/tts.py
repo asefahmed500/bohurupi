@@ -76,7 +76,6 @@ async def synthesize_pcm(
             meta.native_voice_id = voice.native_voice_id
             meta.fallback_used = picked.fallback_used
             meta.sample_rate = last_chunk.sample_rate
-            meta.duration = len(last_chunk.pcm) and 0.0  # duration set by caller
             return
         except NoEngineForLanguage:
             raise
@@ -137,6 +136,7 @@ async def synthesize_to_wav_file(
     asset = AudioAsset(
         id=asset_id,
         message_id=message_id,
+        user_id=user_id,
         voice_id=meta.voice_id or voice_id,
         lang=lang,
         engine=meta.engine,
@@ -151,6 +151,11 @@ async def synthesize_to_wav_file(
     )
     session.commit()
     session.refresh(asset)
+
+    # count against the daily plan quota now that synthesis actually happened
+    from app.services.cache import add_usage
+
+    add_usage(user_id, len(text))
     return asset, meta
 
 

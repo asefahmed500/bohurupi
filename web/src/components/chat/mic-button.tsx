@@ -99,14 +99,19 @@ export function MicButton({
 
   if (state === "confirm") {
     return (
-      <div className="flex items-center gap-2 rounded-full border bg-card py-1 pr-1 pl-3">
-        <p className="max-w-40 truncate text-xs text-muted-foreground sm:max-w-64">
+      <div className="flex items-center gap-2 rounded-md border bg-card py-1 pr-1 pl-3">
+        <p
+          className="line-clamp-2 max-w-40 text-xs text-muted-foreground sm:max-w-64"
+          role="status"
+          title={transcript}
+        >
           {transcript}
         </p>
         <Button
           size="icon-sm"
-          className="rounded-full"
+          className="rounded-md"
           aria-label="Send transcript"
+          autoFocus
           onClick={() => {
             onTranscript(transcript);
             setState("idle");
@@ -118,7 +123,7 @@ export function MicButton({
         <Button
           size="icon-sm"
           variant="ghost"
-          className="rounded-full"
+          className="rounded-md"
           aria-label="Discard transcript"
           onClick={() => {
             setState("idle");
@@ -138,13 +143,13 @@ export function MicButton({
       disabled={disabled || state === "processing"}
       aria-label={
         state === "listening"
-          ? "Listening — tap to stop"
+          ? "Recording — activate to stop"
           : state === "processing"
             ? "Processing speech"
             : "Record speech"
       }
       aria-pressed={state === "listening"}
-      className={`rounded-full ${state === "listening" ? "mic-pulse" : ""}`}
+      className={`rounded-md ${state === "listening" ? "mic-pulse" : ""}`}
     >
       {state === "processing" ? <Loader2 className="animate-spin" /> : <Mic />}
     </Button>

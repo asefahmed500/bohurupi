@@ -136,11 +136,17 @@
 }
 
 @layer utilities {
-  /* Clean white gradient canvas: pure white bloom fading into the off-white page */
+  /* Clean gradient canvas: white blooms on the light page, deep blooms in dark */
   .bg-gradient-clean {
     background:
       radial-gradient(1100px 600px at 50% -12%, oklch(1 0 0) 0%, transparent 62%),
       radial-gradient(800px 500px at 100% 110%, oklch(1 0 0 / 80%) 0%, transparent 58%),
+      var(--background);
+  }
+  .dark .bg-gradient-clean {
+    background:
+      radial-gradient(1100px 600px at 50% -12%, oklch(0.28 0.01 270 / 70%) 0%, transparent 62%),
+      radial-gradient(800px 500px at 100% 110%, oklch(0.26 0.01 270 / 50%) 0%, transparent 58%),
       var(--background);
   }
   /* Subtle white-on-white card gradient */

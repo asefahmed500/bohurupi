@@ -1,0 +1,11 @@
+# Build context hygiene — host artifacts must never clobber image state
+node_modules
+.next
+test-results
+playwright-report
+prod-server.log
+.env
+.env.*
+Dockerfile
+.dockerignore
+e2e

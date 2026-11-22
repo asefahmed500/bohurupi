@@ -1,0 +1,17 @@
+# Build context hygiene — keep the image lean and host junk out
+.venv
+storage
+bohurupi.db
+*.db
+.env
+.env.*
+.pytest_cache
+.ruff_cache
+__pycache__
+**/__pycache__
+*.pyc
+scripts
+tests
+db/migrations/versions/__pycache__
+Dockerfile
+.dockerignore

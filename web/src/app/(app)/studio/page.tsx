@@ -2,15 +2,15 @@
 
 // Voice Studio (PRD §3.4.4): speed, pitch, emotion/style, effect presets with
 // live preview spoken through the `speak` WS frame (no LLM round trip).
+// Self-contained: it ensures a conversation exists instead of requiring the
+// user to open chat first.
 
 import * as React from "react";
-import { Play } from "lucide-react";
 import { toast } from "sonner";
 
-import { ChatSocket } from "@/lib/ws-client";
-import { useApp } from "@/lib/store";
-import type { WsFrame } from "@/lib/types";
+import { speakPreview, audioObjectUrl, type SpeakResult } from "@/lib/speak";
 import { AudioStreamPlayer } from "@/lib/audio-engine";
+import { useApp } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -29,7 +29,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { LanguagePicker } from "@/components/chat/language-picker";
 import { VoicePickerButton } from "@/components/chat/voice-picker";
@@ -54,90 +53,52 @@ export default function StudioPage() {
   const [style, setStyle] = React.useState("neutral");
   const [effect, setEffect] = React.useState("clean");
   const [busy, setBusy] = React.useState(false);
-  const [result, setResult] = React.useState<{
-    audioId: string;
-    engine: string;
-    fallback: boolean;
-    chunks: { b64: string; sr: number }[];
-  } | null>(null);
+  const [result, setResult] = React.useState<(SpeakResult & { url?: string }) | null>(null);
 
-  const socketRef = React.useRef<ChatSocket | null>(null);
   const playerRef = React.useRef<AudioStreamPlayer | null>(null);
-  const chunksRef = React.useRef<{ b64: string; sr: number }[]>([]);
-  const audioIdRef = React.useRef<string>("");
 
   React.useEffect(() => {
-    // A conversation socket is required for `speak`; create a lightweight one.
-    // The endpoint validates the conversation belongs to us — use a throwaway id
-    // only after a real conversation exists; otherwise speak needs conv context.
     return () => {
-      socketRef.current?.close();
       playerRef.current?.stop();
     };
   }, []);
 
-  const handleFrame = (frame: WsFrame) => {
-    if (frame.type === "audio") {
-      chunksRef.current.push({ b64: frame.b64, sr: frame.sr });
-      playerRef.current?.playChunk(frame.b64, frame.sr);
-    } else if (frame.type === "done" && frame.audio_id) {
-      audioIdRef.current = frame.audio_id;
-      setResult({
-        audioId: frame.audio_id,
-        engine: frame.engine ?? "",
-        fallback: frame.fallback ?? false,
-        chunks: [...chunksRef.current],
+  const preview = async () => {
+    if (!sentence.trim() || busy) return;
+    setBusy(true);
+    setResult(null);
+    playerRef.current?.stop();
+    try {
+      const res = await speakPreview({
+        text: sentence.trim(),
+        voiceId,
+        lang,
+        speed,
+        style: style === "neutral" ? undefined : style,
+        effect: effect === "clean" ? undefined : effect,
+        pitchSemitones: pitch,
+        onChunk: (p, b64, sr) => {
+          playerRef.current = p; // the playing player comes from speak.ts
+          p.playChunk(b64, sr);
+        },
       });
       playerRef.current?.markComplete();
-      setBusy(false);
-      if (frame.fallback) {
-        toast.info(`Spoken with ${frame.engine} (fallback)`);
+      let url: string | undefined;
+      try {
+        url = await audioObjectUrl(res.audioId);
+      } catch {
+        url = undefined;
       }
-    } else if (frame.type === "error") {
-      toast.error(frame.message);
+      setResult({ ...res, url });
+      if (res.fallback) {
+        toast.info(`Spoken with ${res.engine} (fallback)`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Preview failed");
+    } finally {
       setBusy(false);
     }
   };
-
-  const preview = async () => {
-    if (!sentence.trim()) return;
-    setBusy(true);
-    chunksRef.current = [];
-    audioIdRef.current = "";
-    playerRef.current = new AudioStreamPlayer();
-    playerRef.current.setSpeed(speed);
-    // reuse the chat socket of a hidden conversation is complex; speak requires
-    // an existing conversation id — the server accepts the frame on any chat ws.
-    if (!socketRef.current) {
-      toast.error("Open a chat first, then come back to the studio");
-      setBusy(false);
-      return;
-    }
-    socketRef.current.speak(sentence, {
-      voiceId,
-      lang,
-      speed,
-      style: style === "neutral" ? undefined : style,
-      effect: effect === "clean" ? undefined : effect,
-      pitchSemitones: pitch,
-    });
-  };
-
-  // The studio needs its own socket bound to the latest conversation. We look it
-  // up lazily from localStorage echo set by the chat page.
-  React.useEffect(() => {
-    try {
-      const convId = localStorage.getItem("bohurupi.active-conv");
-      if (!convId) return;
-      socketRef.current?.close();
-      const sock = new ChatSocket(convId, { onFrame: handleFrame });
-      socketRef.current = sock;
-      sock.connect();
-    } catch {
-      /* ignore */
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
     <PageContainer size="narrow">
@@ -219,7 +180,7 @@ export default function StudioPage() {
             <Field>
               <FieldLabel>Emotion / style</FieldLabel>
               <Select value={style} onValueChange={(v) => v && setStyle(v)}>
-                <SelectTrigger>
+                <SelectTrigger aria-label="Emotion / style">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -234,7 +195,7 @@ export default function StudioPage() {
             <Field>
               <FieldLabel>Effect</FieldLabel>
               <Select value={effect} onValueChange={(v) => v && setEffect(v)}>
-                <SelectTrigger>
+                <SelectTrigger aria-label="Effect">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -248,9 +209,8 @@ export default function StudioPage() {
             </Field>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button onClick={() => void preview()} disabled={busy}>
-              {busy ? <Spinner data-icon="inline-start" /> : <Play data-icon="inline-start" />}
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onClick={() => void preview()} loading={busy} disabled={!sentence.trim()}>
               Preview
             </Button>
             {result && (
@@ -258,25 +218,14 @@ export default function StudioPage() {
                 <Badge variant={result.fallback ? "destructive" : "secondary"}>
                   {result.fallback ? `${result.engine} (fallback)` : result.engine}
                 </Badge>
-                {result.audioId && (
-                  <audio
-                    controls
-                    src={`${
-                      process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-                    }/audio/${result.audioId}`}
-                    className="h-8"
-                  />
+                {result.url && (
+                  <audio controls src={result.url} className="h-8" />
                 )}
               </>
             )}
           </div>
         </CardContent>
       </Card>
-
-      <p className="mt-4 text-xs text-muted-foreground">
-        Tip: the studio speaks through your latest chat conversation’s connection. Open the chat
-        once after signing in, then return here.
-      </p>
     </PageContainer>
   );
 }

@@ -13,20 +13,22 @@ import { Spinner } from "@/components/ui/spinner";
 function OAuthCallback() {
   const params = useSearchParams();
   const router = useRouter();
-  const { setTokenFromOAuth, ready } = useApp();
+  const { setTokenFromOAuth } = useApp();
   const ran = React.useRef(false);
 
   React.useEffect(() => {
     if (ran.current) return;
-    const token = params.get("token") ?? location.hash.match(/token=([^&]+)/)?.[1];
+    const hash = location.hash.match(/token=([^&]+)/)?.[1];
+    const refresh = location.hash.match(/refresh=([^&]+)/)?.[1];
+    const token = params.get("token") ?? hash;
     if (!token) {
       toast.error("Sign-in failed — no token");
       router.replace("/login");
       return;
     }
     ran.current = true;
-    setTokenFromOAuth(token)
-      .then(() => router.replace("/"))
+    setTokenFromOAuth(token, refresh ?? "")
+      .then(() => router.replace("/chat"))
       .catch(() => {
         toast.error("Sign-in failed");
         router.replace("/login");

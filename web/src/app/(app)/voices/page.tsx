@@ -8,10 +8,12 @@ import { Heart, Mic, Play, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { deleteVoice, listVoices } from "@/lib/api";
+import { speakPreview } from "@/lib/speak";
+import { AudioStreamPlayer } from "@/lib/audio-engine";
 import { useApp } from "@/lib/store";
 import type { Voice } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Empty,
@@ -29,8 +31,33 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageContainer, PageHeader } from "@/components/page-container";
+
+// one-word greeting per launch language so the preview speaks the right script
+const GREETINGS: Record<string, string> = {
+  bn: "নমস্কার",
+  en: "Hello",
+  hi: "नमस्ते",
+  ur: "ہیلو",
+  ar: "مرحبا",
+  es: "Hola",
+  fr: "Bonjour",
+  de: "Hallo",
+  pt: "Olá",
+  ru: "Привет",
+  tr: "Merhaba",
+  zh: "你好",
+  ja: "こんにちは",
+  ko: "안녕하세요",
+  it: "Ciao",
+  nl: "Hallo",
+  pl: "Cześć",
+  id: "Halo",
+  ta: "வணக்கம்",
+  vi: "Xin chào",
+};
 
 export default function VoicesPage() {
   const { user } = useApp();
@@ -39,6 +66,8 @@ export default function VoicesPage() {
   const [query, setQuery] = React.useState("");
   const [lang, setLang] = React.useState("all");
   const [gender, setGender] = React.useState("all");
+  const [previewingId, setPreviewingId] = React.useState<string | null>(null);
+  const [favoritesOnly, setFavoritesOnly] = React.useState(false);
   const [favorites, setFavorites] = React.useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("bohurupi.fav-voices") ?? "[]");
@@ -47,6 +76,7 @@ export default function VoicesPage() {
     }
   });
   const { languages } = useApp();
+  const previewPlayerRef = React.useRef<AudioStreamPlayer | null>(null);
 
   const load = React.useCallback(async () => {
     setVoices(null);
@@ -68,13 +98,55 @@ export default function VoicesPage() {
     return () => clearTimeout(t);
   }, [load]);
 
+  React.useEffect(() => () => previewPlayerRef.current?.stop(), []);
+
   const remove = async (id: string) => {
+    if (
+      !confirm("Delete this voice? The sample, consent audio and embeddings are removed permanently.")
+    ) {
+      return;
+    }
     try {
       await deleteVoice(id);
       toast.success("Voice deleted");
       void load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
+    }
+  };
+
+  const preview = async (v: Voice) => {
+    if (previewingId === v.id) {
+      previewPlayerRef.current?.stop();
+      previewPlayerRef.current = null;
+      setPreviewingId(null);
+      return;
+    }
+    previewPlayerRef.current?.stop();
+    const voiceLang = v.languages[0] ?? "en";
+    const greeting = GREETINGS[voiceLang] ?? "Hello";
+    setPreviewingId(v.id);
+    try {
+      await speakPreview({
+        text: `${greeting} — ${greeting}`,
+        voiceId: v.id,
+        lang: voiceLang,
+        onChunk: (p, b64, sr) => {
+          previewPlayerRef.current = p; // the playing player comes from speak.ts
+          p.playChunk(b64, sr);
+        },
+      });
+      // speak.ts marks the queue complete on done; if the clip already
+      // finished while we awaited, clear the spinner right away
+      const active = previewPlayerRef.current;
+      if (active?.isPlaying()) {
+        active.onDone(() => setPreviewingId((cur) => (cur === v.id ? null : cur)));
+      } else {
+        setPreviewingId(null);
+      }
+    } catch (e) {
+      setPreviewingId(null);
+      toast.error(e instanceof Error ? e.message : "Preview failed");
     }
   };
 
@@ -92,10 +164,10 @@ export default function VoicesPage() {
         title="Voice library"
         description="Presets by language, gender and style — plus your own cloned voices."
         actions={
-          <Button render={<Link href="/voices/clone" />}>
+          <Link href="/voices/clone" className={buttonVariants()}>
             <Plus data-icon="inline-start" />
             Clone a voice
-          </Button>
+          </Link>
         }
       />
 
@@ -106,6 +178,15 @@ export default function VoicesPage() {
             <TabsTrigger value="mine">My voices</TabsTrigger>
           </TabsList>
         </Tabs>
+        <Button
+          variant={favoritesOnly ? "secondary" : "outline"}
+          size="sm"
+          aria-pressed={favoritesOnly}
+          onClick={() => setFavoritesOnly((v) => !v)}
+        >
+          <Heart data-icon="inline-start" className={favoritesOnly ? "fill-current" : undefined} />
+          Favorites{favorites.length > 0 ? ` (${favorites.length})` : ""}
+        </Button>
         <div className="relative flex-1">
           <Input
             value={query}
@@ -142,29 +223,47 @@ export default function VoicesPage() {
       </div>
 
       <div className="mt-6">
-        {voices === null ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {Array.from({ length: 9 }).map((_, i) => (
-              <Skeleton key={i} className="h-24 rounded-xl" />
-            ))}
-          </div>
-        ) : voices.length === 0 ? (
-          <Empty className="rounded-xl border bg-card">
-            <EmptyHeader>
-              <EmptyMedia>
-                <Mic />
-              </EmptyMedia>
-              <EmptyTitle>{tab === "mine" ? "No voices yet" : "No voices match"}</EmptyTitle>
-              <EmptyDescription>
-                {tab === "mine"
-                  ? "Clone your own voice from a 10–30 second sample, or use presets."
-                  : "Try different search or filters."}
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {voices.map((v) => (
+        {(() => {
+          if (voices === null) {
+            return (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {Array.from({ length: 9 }).map((_, i) => (
+                  <Skeleton key={i} className="h-24 rounded-xl" />
+                ))}
+              </div>
+            );
+          }
+          const visible = favoritesOnly
+            ? voices.filter((v) => favorites.includes(v.id))
+            : voices;
+          if (visible.length === 0) {
+            return (
+              <Empty className="rounded-xl border bg-card">
+                <EmptyHeader>
+                  <EmptyMedia>
+                    <Mic />
+                  </EmptyMedia>
+                  <EmptyTitle>
+                    {favoritesOnly
+                      ? "No favorites yet"
+                      : tab === "mine"
+                        ? "No voices yet"
+                        : "No voices match"}
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    {favoritesOnly
+                      ? "Tap the heart on a voice to save it here (stored on this device)."
+                      : tab === "mine"
+                        ? "Clone your own voice from a 10–30 second sample, or use presets."
+                        : "Try different search or filters."}
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            );
+          }
+          return (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {visible.map((v) => (
               <Card key={v.id} className="bg-gradient-card py-0">
                 <CardContent className="flex h-full flex-col gap-2 p-4">
                   <div className="flex items-start gap-2">
@@ -200,15 +299,19 @@ export default function VoicesPage() {
                       size="icon-sm"
                       variant="ghost"
                       className="ml-auto"
-                      aria-label="Preview sample"
-                      onClick={() => toast.info("Preview: pick this voice in chat to hear it")}
+                      aria-label={previewingId === v.id ? "Stop preview" : "Preview voice"}
+                      onClick={() => void preview(v)}
                     >
-                      <Play />
+                      {previewingId === v.id ? (
+                        <Spinner className="size-4" />
+                      ) : (
+                        <Play />
+                      )}
                     </Button>
                     {v.owner_id === user?.id && (
                       <Button
                         size="icon-sm"
-                        variant="ghost"
+                        variant="destructive"
                         aria-label="Delete voice"
                         onClick={() => void remove(v.id)}
                       >
@@ -218,9 +321,10 @@ export default function VoicesPage() {
                   </div>
                 </CardContent>
               </Card>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          );
+        })()}
       </div>
     </PageContainer>
   );

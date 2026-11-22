@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session
 
 from app.audio import watermark
-from app.db.models import AudioAsset, Conversation, User
+from app.db.models import AudioAsset, Conversation, Message, User
 from app.db.session import get_session
 from app.deps import get_current_user, require_admin
 from app.services import storage
@@ -17,16 +17,17 @@ def _get_accessible_asset(audio_id: str, user: User, session: Session) -> AudioA
     asset = session.get(AudioAsset, audio_id)
     if asset is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Audio not found")
-    # ownership via message -> conversation
-    from app.db.models import Message
-
+    if user.role == "admin":
+        return asset
+    # ownership: direct user_id, or via message -> conversation
+    if asset.user_id == user.id:
+        return asset
     if asset.message_id:
         msg = session.get(Message, asset.message_id)
         conv = session.get(Conversation, msg.conversation_id) if msg else None
-        owner_id = conv.user_id if conv else None
-        if owner_id != user.id and user.role != "admin":
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Audio not found")
-    return asset
+        if conv is not None and conv.user_id == user.id:
+            return asset
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "Audio not found")
 
 
 @router.get("/audio/{audio_id}")

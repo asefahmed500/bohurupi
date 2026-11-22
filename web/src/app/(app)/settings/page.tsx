@@ -34,13 +34,19 @@ import { PageContainer, PageHeader } from "@/components/page-container";
 export default function SettingsPage() {
   const { settings, updateSettings, user } = useApp();
   const [myVoices, setMyVoices] = React.useState<{ id: string; name: string }[]>([]);
+  const [defaultVoiceName, setDefaultVoiceName] = React.useState("Voice");
 
   React.useEffect(() => {
     if (!user) return;
-    listVoices({ mine: true })
-      .then((res) => setMyVoices(res.voices.map((v) => ({ id: v.id, name: v.name }))))
+    listVoices({})
+      .then((res) => {
+        const mine = res.voices.filter((v) => !v.is_preset && v.owner_id === user.id);
+        setMyVoices(mine.map((v) => ({ id: v.id, name: v.name })));
+        const match = res.voices.find((v) => v.id === settings.default_voice_id);
+        if (match) setDefaultVoiceName(match.name);
+      })
       .catch(() => undefined);
-  }, [user]);
+  }, [user, settings.default_voice_id]);
 
   const removeVoice = async (id: string, name: string) => {
     if (!confirm(`Delete "${name}"? The voice sample and embeddings are removed permanently.`))
@@ -106,8 +112,11 @@ export default function SettingsPage() {
                 <FieldLabel className="text-xs text-muted-foreground">Voice</FieldLabel>
                 <VoicePickerButton
                   value={settings.default_voice_id}
-                  voiceName={settings.default_voice_id || "Voice"}
-                  onChange={(v) => void updateSettings({ default_voice_id: v.id })}
+                  voiceName={settings.default_voice_id ? defaultVoiceName : "Voice"}
+                  onChange={(v) => {
+                    setDefaultVoiceName(v.name);
+                    void updateSettings({ default_voice_id: v.id });
+                  }}
                 />
               </div>
             </div>
@@ -180,9 +189,7 @@ export default function SettingsPage() {
             </div>
             <Separator />
             <p className="text-xs text-muted-foreground">
-              Keyboard: <kbd className="rounded border bg-muted px-1">Space</kbd> play/pause ·{" "}
-              <kbd className="rounded border bg-muted px-1">M</kbd> microphone. Reduced-motion is
-              respected automatically.
+              Voice replies respect your system&apos;s reduced-motion setting automatically.
             </p>
           </CardContent>
         </Card>
@@ -203,7 +210,7 @@ export default function SettingsPage() {
                   <span className="min-w-0 flex-1 truncate text-sm">{v.name}</span>
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="destructive"
                     onClick={() => void removeVoice(v.id, v.name)}
                   >
                     <Trash2 data-icon="inline-start" />

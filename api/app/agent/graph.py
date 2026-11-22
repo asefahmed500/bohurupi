@@ -22,6 +22,21 @@ from app.agent.tools import get_tools, translate_text
 logger = logging.getLogger("bohurupi.agent.graph")
 
 
+def _retryable_llm_error(exc: Exception) -> bool:
+    """Never burn retries on permanent provider errors (balance/key/model)."""
+    message = str(exc).lower()
+    permanent = (
+        "insufficient balance",
+        "no resource package",
+        "recharge",
+        "invalid api key",
+        "authentication",
+        "model not found",
+        "does not exist",
+    )
+    return not any(phrase in message for phrase in permanent)
+
+
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     text: str  # user input text
@@ -35,21 +50,31 @@ class AgentState(TypedDict):
 # ---- nodes ----
 
 
+_detector = None
+
+
+def _get_detector():
+    """Lingua detector built once (from_languages + preloaded models is expensive)."""
+    global _detector
+    if _detector is None:
+        from lingua import LanguageDetectorBuilder
+
+        _detector = (
+            LanguageDetectorBuilder.from_languages(*_LINGUA_LANGS)
+            .with_preloaded_language_models()
+            .build()
+        )
+    return _detector
+
+
 def detect_language(state: AgentState) -> dict:
     """Language ID on short text via lingua-py."""
-    from lingua import LanguageDetectorBuilder
-
     text = state["text"].strip()
     if not text:
         return {"in_lang": "", "reply_lang": ""}
-    detector = (
-        LanguageDetectorBuilder.from_languages(*_LINGUA_LANGS)
-        .with_preloaded_language_models()
-        .build()
-    )
-    detected = detector.detect_language_of(text)
+    detected = _get_detector().detect_language_of(text)
     code = detected.iso_code_639_1.name.lower() if detected else ""
-    return {"in_lang": code}
+    return {"in_lang": _LINGUA_CODE_OVERRIDES.get(code, code)}
 
 
 async def reason(state: AgentState, config: RunnableConfig) -> dict:
@@ -109,7 +134,19 @@ _LINGUA_LANGS = [
     _Language.PORTUGUESE, _Language.RUSSIAN, _Language.TURKISH, _Language.CHINESE,
     _Language.JAPANESE, _Language.KOREAN, _Language.ITALIAN, _Language.DUTCH,
     _Language.POLISH, _Language.INDONESIAN, _Language.TAMIL, _Language.VIETNAMESE,
+    # expanded voice library
+    _Language.AFRIKAANS, _Language.AZERBAIJANI, _Language.BULGARIAN,
+    _Language.BOSNIAN, _Language.CATALAN, _Language.CZECH, _Language.DANISH,
+    _Language.GREEK, _Language.FINNISH, _Language.HEBREW, _Language.CROATIAN,
+    _Language.HUNGARIAN, _Language.ICELANDIC, _Language.GEORGIAN, _Language.KAZAKH,
+    _Language.LITHUANIAN, _Language.LATVIAN, _Language.MACEDONIAN, _Language.MARATHI,
+    _Language.MALAY, _Language.ROMANIAN, _Language.SLOVAK,
+    _Language.ALBANIAN, _Language.SERBIAN, _Language.SWEDISH, _Language.SWAHILI,
+    _Language.TELUGU, _Language.THAI, _Language.UKRAINIAN,
 ]
+
+# lingua reports a few ISO codes differently from our language catalog
+_LINGUA_CODE_OVERRIDES = {"no": "nb"}
 
 
 def _content_str(content: object) -> str:
@@ -125,7 +162,11 @@ def _content_str(content: object) -> str:
 def build_graph():
     g = StateGraph(AgentState)
     g.add_node("detect", detect_language, retry_policy=RetryPolicy(max_attempts=2))
-    g.add_node("reason", reason, retry_policy=RetryPolicy(max_attempts=3))
+    g.add_node(
+        "reason",
+        reason,
+        retry_policy=RetryPolicy(max_attempts=3, retry_on=_retryable_llm_error),
+    )
     g.add_node("tools", _tool_node)
     g.add_node("translate", translate, retry_policy=RetryPolicy(max_attempts=2))
     g.add_edge(START, "detect")

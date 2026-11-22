@@ -11,8 +11,9 @@ import { toast } from "sonner";
 
 import { cloneVoice, getConsentPhrase } from "@/lib/api";
 import { useApp } from "@/lib/store";
+import { blobToWavFile } from "@/lib/wav";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -24,8 +25,6 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
-import { MicButton } from "@/components/chat/mic-button";
 import { PageContainer, PageHeader } from "@/components/page-container";
 
 export default function ClonePage() {
@@ -42,27 +41,44 @@ export default function ClonePage() {
   const [voiceName, setVoiceName] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [recording, setRecording] = React.useState(false);
+  const [recordingSample, setRecordingSample] = React.useState(false);
+  const [sampleSeconds, setSampleSeconds] = React.useState(0);
   const recorderRef = React.useRef<MediaRecorder | null>(null);
+  const sampleRecorderRef = React.useRef<MediaRecorder | null>(null);
   const chunksRef = React.useRef<Blob[]>([]);
-  const step2ConsentRef = React.useRef<Blob[]>([]);
+  const sampleChunksRef = React.useRef<Blob[]>([]);
+  const sampleStreamRef = React.useRef<MediaStream | null>(null);
+  const timerRef = React.useRef<number | null>(null);
 
   const stepMeta = ["Consent", "Sample", "Quality", "Finish"];
 
+  const [phraseError, setPhraseError] = React.useState(false);
+
   const loadPhrase = React.useCallback(async (lang: string) => {
+    setPhraseError(false);
     try {
       const res = await getConsentPhrase(lang);
       setPhrase(res.phrase);
     } catch {
       setPhrase("");
+      setPhraseError(true);
     }
   }, []);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadPhrase(consentLang);
   }, [consentLang, loadPhrase]);
 
   React.useEffect(() => {
-    if (user) setVoiceName((n) => n || `${user.name || "My"}'s voice`);
+    if (user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setVoiceName((n) => n || `${user.name || "My"}'s voice`);
+    }
+    return () => {
+      if (timerRef.current) window.clearInterval(timerRef.current);
+      sampleStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
   }, [user]);
 
   const startConsentRecording = async () => {
@@ -77,7 +93,6 @@ export default function ClonePage() {
     recorder.onstop = () => {
       stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-      step2ConsentRef.current = chunksRef.current;
       setConsentAudio(new File([blob], "consent.webm", { type: blob.type }));
     };
     recorder.start();
@@ -91,9 +106,66 @@ export default function ClonePage() {
     setRecording(false);
   };
 
+  const startSampleRecording = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+    if (!stream) {
+      toast.error("Microphone access denied");
+      return;
+    }
+    sampleStreamRef.current = stream;
+    const recorder = new MediaRecorder(stream);
+    sampleChunksRef.current = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) sampleChunksRef.current.push(e.data);
+    };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(sampleChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+      try {
+        const wav = await blobToWavFile(blob, "voice-sample");
+        setSample(wav);
+        toast.success(`Sample recorded (${Math.round(wav.size / 1024)} KB)`);
+      } catch {
+        toast.error("Could not process the recording — try uploading a file instead");
+      }
+    };
+    recorder.start();
+    sampleRecorderRef.current = recorder;
+    setRecordingSample(true);
+    setSampleSeconds(0);
+    timerRef.current = window.setInterval(() => {
+      setSampleSeconds((s) => {
+        // hard-stop at 35 s — samples over 30 s are rejected server-side
+        if (s + 1 >= 35) {
+          window.clearInterval(timerRef.current!);
+          timerRef.current = null;
+          sampleRecorderRef.current?.stop();
+          sampleRecorderRef.current = null;
+          setRecordingSample(false);
+          toast.info("Recording stopped at 35 s (30 s max for a sample)");
+        }
+        return Math.min(60, s + 1);
+      });
+    }, 1000);
+  };
+
+  const stopSampleRecording = () => {
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    sampleRecorderRef.current?.stop();
+    sampleRecorderRef.current = null;
+    setRecordingSample(false);
+  };
+
   const nextFromConsent = () => {
     if (!consentGiven) {
       toast.error("Please confirm you have the right to clone this voice");
+      return;
+    }
+    if (phraseError) {
+      toast.error("The consent phrase could not be loaded — retry first");
       return;
     }
     if (typedPhrase.trim() !== phrase.trim()) {
@@ -119,6 +191,13 @@ export default function ClonePage() {
     if (!sample || !consentAudio) return;
     setBusy(true);
     try {
+      // the backend reads uploads with libsndfile — always send WAV
+      const sampleWav =
+        sample.type === "audio/wav" ? sample : await blobToWavFile(sample, sample.name || "sample");
+      const consentWav =
+        consentAudio.type === "audio/wav"
+          ? consentAudio
+          : await blobToWavFile(consentAudio, "consent");
       const res = await cloneVoice(
         {
           name: voiceName.trim() || "My voice",
@@ -127,8 +206,8 @@ export default function ClonePage() {
           consent_phrase_text: typedPhrase.trim(),
           sample_lang: sampleLang,
         },
-        sample,
-        consentAudio
+        sampleWav,
+        consentWav
       );
       toast.success(res.note);
       router.push("/voices");
@@ -141,12 +220,10 @@ export default function ClonePage() {
 
   return (
     <PageContainer size="narrow">
-      <Button variant="ghost" size="sm" className="mb-4">
-        <Link href="/voices" className="flex items-center gap-1.5">
-          <ArrowLeft className="size-4" />
-          Voice library
-        </Link>
-      </Button>
+      <Link href="/voices" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+        <ArrowLeft data-icon="inline-start" />
+        Voice library
+      </Link>
 
       <PageHeader
         title="Clone a voice"
@@ -199,9 +276,18 @@ export default function ClonePage() {
                 <option value="hi">हिन्दी</option>
               </select>
             </div>
-            <blockquote className="rounded-lg border bg-card p-3 text-sm leading-relaxed">
-              “{phrase}”
-            </blockquote>
+            {phraseError ? (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">
+                <span>Could not load the consent phrase.</span>
+                <Button size="sm" variant="outline" onClick={() => void loadPhrase(consentLang)}>
+                  Retry
+                </Button>
+              </div>
+            ) : (
+              <blockquote className="rounded-lg border bg-card p-3 text-sm leading-relaxed">
+                “{phrase}”
+              </blockquote>
+            )}
             <Field>
               <FieldLabel htmlFor="phrase">Type the phrase exactly</FieldLabel>
               <Input
@@ -209,6 +295,7 @@ export default function ClonePage() {
                 value={typedPhrase}
                 onChange={(e) => setTypedPhrase(e.target.value)}
                 placeholder={phrase}
+                disabled={phraseError}
               />
             </Field>
             <Field>
@@ -289,7 +376,14 @@ export default function ClonePage() {
                   type="file"
                   accept="audio/*"
                   className="sr-only"
-                  onChange={(e) => setSample(e.target.files?.[0] ?? null)}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] ?? null;
+                    if (file && file.size > 20 * 1024 * 1024) {
+                      toast.error("File is over 20 MB — trim it and try again");
+                      return;
+                    }
+                    setSample(file);
+                  }}
                 />
                 {sample && (
                   <span className="text-xs text-foreground">
@@ -303,13 +397,26 @@ export default function ClonePage() {
                 <span className="text-xs text-muted-foreground">
                   Talk naturally for 10–30 s about your day.
                 </span>
-                <MicButton
-                  onTranscript={() => undefined}
-                  disabled
-                />
-                <p className="text-xs text-muted-foreground">
-                  Record in chat and upload it — studio-grade recording comes in the next release.
-                </p>
+                {recordingSample ? (
+                  <Button variant="outline" onClick={stopSampleRecording}>
+                    <Square data-icon="inline-start" />
+                    Stop ({sampleSeconds}s)
+                  </Button>
+                ) : (
+                  <Button variant="outline" onClick={() => void startSampleRecording()}>
+                    <Mic data-icon="inline-start" />
+                    {sample ? "Re-record" : "Record sample"}
+                  </Button>
+                )}
+                {sample && !recordingSample && (
+                  <span className="inline-flex items-center gap-1 text-xs text-foreground">
+                    <CheckCircle2 className="size-4" /> {sample.name} (
+                    {Math.round(sample.size / 1024)} KB)
+                  </span>
+                )}
+                {recordingSample && sampleSeconds < 10 && (
+                  <p className="text-xs text-muted-foreground">Keep talking — at least 10 s.</p>
+                )}
               </div>
             </div>
           </CardContent>
@@ -318,7 +425,7 @@ export default function ClonePage() {
               Back
             </Button>
             <Button onClick={nextFromSample} disabled={!sample}>
-              Check quality
+              Continue
               <ArrowRight data-icon="inline-end" />
             </Button>
           </CardFooter>
@@ -328,9 +435,9 @@ export default function ClonePage() {
       {step === 3 && (
         <Card className="bg-gradient-card">
           <CardHeader>
-            <CardTitle>Quality check & finish</CardTitle>
+            <CardTitle>Name &amp; submit</CardTitle>
             <CardDescription>
-              We validate duration, loudness and clipping before submission.
+              Duration, loudness and clipping are validated on the server when you submit.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -361,8 +468,7 @@ export default function ClonePage() {
             <Button variant="ghost" onClick={() => setStep(2)}>
               Back
             </Button>
-            <Button onClick={() => void submit()} disabled={busy}>
-              {busy && <Spinner data-icon="inline-start" />}
+            <Button onClick={() => void submit()} loading={busy}>
               Submit voice
             </Button>
           </CardFooter>

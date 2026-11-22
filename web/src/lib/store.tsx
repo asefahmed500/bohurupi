@@ -11,6 +11,7 @@ import {
   getSettings,
   loadTokens,
   login as apiLogin,
+  demoLogin,
   putSettings,
   register as apiRegister,
   saveTokens,
@@ -24,9 +25,10 @@ interface AppState {
   languages: Language[];
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name: string) => Promise<void>;
+  loginDemo: () => Promise<void>;
   logout: () => void;
   updateSettings: (patch: Partial<UserSettings>) => Promise<void>;
-  setTokenFromOAuth: (token: string) => Promise<void>;
+  setTokenFromOAuth: (token: string, refreshToken?: string) => Promise<void>;
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -67,26 +69,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const stored = typeof window !== "undefined" ? loadLocalTheme() : "system";
       applyTheme(stored);
-      try {
-        const langs = await getLanguages();
-        if (!cancelled) setLanguages(langs.languages);
-      } catch {
-        /* backend not reachable yet */
+      // /languages and /auth/me are independent — fetch in parallel
+      const [langs, me] = await Promise.allSettled([getLanguages(), loadTokens() ? getMe() : null]);
+      if (!cancelled && langs.status === "fulfilled") {
+        setLanguages(langs.value.languages);
+      }
+      if (!cancelled && me.status === "fulfilled" && me.value) {
+        setUser(me.value);
+      }
+      if (!cancelled && me.status === "rejected") {
+        saveTokens(null);
       }
       if (loadTokens()) {
         try {
-          const me = await getMe();
-          if (!cancelled) setUser(me);
-          try {
-            const s = await getSettings();
-            if (!cancelled) setSettings(s);
-            if (!cancelled) saveLocalTheme(s.theme);
+          const s = await getSettings();
+          if (!cancelled) {
+            setSettings(s);
+            saveLocalTheme(s.theme);
             applyTheme(s.theme);
-          } catch {
-            /* settings fall back to defaults */
           }
         } catch {
-          saveTokens(null);
+          /* settings fall back to defaults */
         }
       }
       if (!cancelled) setReady(true);
@@ -135,17 +138,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [finishAuth]
   );
 
+  const loginDemo = React.useCallback(async () => {
+    const tokens = await demoLogin();
+    saveTokens(tokens);
+    await finishAuth(tokens);
+  }, [finishAuth]);
+
   const setTokenFromOAuth = React.useCallback(
-    async (token: string) => {
+    async (token: string, refreshToken = "") => {
       saveTokens({
         access_token: token,
-        refresh_token: "",
+        refresh_token: refreshToken,
         user: { id: "", email: "", name: "", role: "user", plan: "free", created_at: "" },
       });
       const me = await getMe();
       saveTokens({
         access_token: token,
-        refresh_token: "",
+        refresh_token: refreshToken,
         user: me,
       });
       await finishAuth({ user: me });
@@ -171,7 +180,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         try {
           const updated = await putSettings(patch);
           setSettings(updated);
-        } catch (e) {
+        } catch {
           toast.error("Could not save settings");
         }
       }
@@ -186,6 +195,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     languages,
     login,
     register,
+    loginDemo,
     logout,
     updateSettings,
     setTokenFromOAuth,

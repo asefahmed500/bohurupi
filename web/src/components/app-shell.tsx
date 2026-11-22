@@ -18,7 +18,6 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   AudioLines,
   Clock,
-  LayoutDashboard,
   MessageCircle,
   Mic,
   Plus,
@@ -50,7 +49,7 @@ import {
 } from "@/components/ui/sidebar";
 
 const NAV = [
-  { href: "/", label: "Chat", icon: MessageCircle },
+  { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/voices", label: "Voices", icon: Mic },
   { href: "/studio", label: "Studio", icon: AudioLines },
   { href: "/history", label: "History", icon: Clock },
@@ -175,7 +174,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { ready, user } = useApp();
   const pathname = usePathname();
   const router = useRouter();
-  const isChat = pathname === "/";
+  const isChat = pathname === "/chat";
 
   React.useEffect(() => {
     if (ready && !user) router.replace("/login");
@@ -201,7 +200,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <SidebarProvider>
       <Sidebar collapsible="icon" className="hidden md:flex">
         <SidebarHeader className="flex-row items-center gap-2 p-3">
-          <Link href="/" className="flex min-w-0 flex-1 items-center gap-2 px-1 py-1">
+          <Link href="/chat" className="flex min-w-0 flex-1 items-center gap-2 px-1 py-1">
             <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <Mic className="size-4" />
             </span>

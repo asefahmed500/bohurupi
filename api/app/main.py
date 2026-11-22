@@ -6,9 +6,41 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import MutableHeaders
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api import admin, audio, auth, chat, meta, stt, voices, ws
 from app.config import settings
+from app.security import assert_security_config
+
+
+class SecurityHeadersMiddleware:
+    """Conservative security headers on every HTTP response.
+
+    Pure ASGI (not BaseHTTPMiddleware) so audio streaming and WebSockets pass
+    through untouched. Deliberately no CSP: /docs (dev only) needs inline
+    scripts, and this API serves JSON + audio downloads only.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":  # websockets pass through untouched
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(raw=message["headers"])
+                headers.setdefault("X-Content-Type-Options", "nosniff")
+                headers.setdefault("X-Frame-Options", "DENY")
+                headers.setdefault("Referrer-Policy", "same-origin")
+                message["headers"] = headers.raw
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 def _setup_logging() -> None:
@@ -26,6 +58,7 @@ async def lifespan(app: FastAPI):
     from app.engines.registry import get_registry
 
     init_db()
+    _cleanup_stale_previews()
     # warm Kokoro in the background (model download/load must not block boot)
     registry = get_registry()
     for engine in registry.engines:
@@ -34,7 +67,42 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def _cleanup_stale_previews() -> None:
+    """Delete studio-preview WAVs (no linked message) older than 30 days.
+
+    Previews are never referenced by chat history, so without this the audio
+    directory grows unboundedly (perf audit finding #10)."""
+    import time as _time
+
+    from sqlmodel import Session, select
+
+    from app.db.models import AudioAsset
+    from app.db.session import engine
+    from app.services import storage
+
+    cutoff = _time.time() - 30 * 86400
+    try:
+        with Session(engine) as session:
+            stale = session.exec(
+                select(AudioAsset).where(AudioAsset.message_id.is_(None))  # type: ignore[union-attr]
+            ).all()
+            removed = 0
+            for asset in stale:
+                created = asset.created_at.timestamp() if asset.created_at else 0
+                if created >= cutoff:
+                    continue
+                (storage.root() / asset.path).unlink(missing_ok=True)
+                session.delete(asset)
+                removed += 1
+            if removed:
+                session.commit()
+                logging.getLogger("bohurupi.api").info("Removed %s stale preview assets", removed)
+    except Exception:  # pragma: no cover - cleanup must never block boot
+        logging.getLogger("bohurupi.api").exception("Preview cleanup failed")
+
+
 def create_app() -> FastAPI:
+    assert_security_config()
     _setup_logging()
     app = FastAPI(
         title=settings.app_name,
@@ -50,6 +118,18 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Added after CORS => outermost, so headers land on every response
+    # (including CORS errors and preflight).
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    if settings.google_client_id:
+        # authlib's OAuth flow stores CSRF state in the Starlette session
+        app.add_middleware(
+            SessionMiddleware,
+            secret_key=settings.jwt_secret,
+            same_site="lax",
+            https_only=settings.env == "prod",
+        )
 
     app.include_router(meta.router)
     app.include_router(auth.router)

@@ -17,6 +17,8 @@ class Health(BaseModel):
     env: str
     llm: bool
     stt: bool
+    oauth_google: bool
+    demo: bool
     engines: list[dict]
 
 
@@ -33,6 +35,8 @@ async def health():
         env=settings.env,
         llm=llm_ready(),
         stt=is_available(),
+        oauth_google=bool(settings.google_client_id),
+        demo=settings.demo_enabled,
         engines=registry.engine_status(),
     )
 

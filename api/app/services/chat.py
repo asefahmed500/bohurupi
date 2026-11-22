@@ -25,6 +25,7 @@ from app.agent.graph import get_graph
 from app.agent.llm import llm_ready
 from app.agent.prompts import SYSTEM_PROMPT
 from app.audio import textprep
+from app.config import settings
 from app.db.models import Conversation, Message, UsageEvent
 from app.i18n import LANGUAGES
 from app.services import cache as cache_svc
@@ -66,6 +67,7 @@ def _build_messages(
     conversation: Conversation,
     text: str,
     out_lang: str,
+    exclude_message_id: str | None = None,
 ) -> list:
     prompt = SYSTEM_PROMPT.format(out_lang_instruction=_out_lang_instruction(out_lang))
     messages: list = [SystemMessage(content=prompt)]
@@ -73,9 +75,11 @@ def _build_messages(
         select(Message)
         .where(Message.conversation_id == conversation.id)
         .order_by(Message.created_at.desc())  # type: ignore[union-attr]
-        .limit(HISTORY_MESSAGES)
+        .limit(HISTORY_MESSAGES + 1)
     ).all()
     for m in reversed(history):
+        if exclude_message_id and m.id == exclude_message_id:
+            continue  # the live user turn is appended below — never send it twice
         content = m.text
         if m.role == "assistant" and m.translations:
             key = out_lang if out_lang != "auto" else m.lang
@@ -113,13 +117,17 @@ async def stream_chat(
     session.refresh(user_msg)
 
     sink: asyncio.Queue[dict | None] = asyncio.Queue()
+    # full-reply audio accumulated across sentences (persisted on done; F10 export)
+    rendered: list[tuple[bytes, int]] = []
+    spoken_chars = 0
 
     async def producer() -> None:
+        nonlocal spoken_chars
         sentence_q: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
         seq = 0
 
         async def tts_worker() -> None:
-            nonlocal seq
+            nonlocal seq, spoken_chars
             while True:
                 item = await sentence_q.get()
                 if item is None:
@@ -151,6 +159,8 @@ async def stream_chat(
                             first = False
                         seq += 1
                         await sink.put(audio_frame(seq, chunk))
+                        rendered.append((chunk.pcm, chunk.sample_rate))
+                    spoken_chars += len(sentence)
                     await sink.put(
                         {
                             "type": "sentence_end",
@@ -177,7 +187,9 @@ async def stream_chat(
         try:
             await sink.put({"type": "status", "stage": "thinking"})
             state_in = {
-                "messages": _build_messages(session, conversation, text, out_lang),
+                "messages": _build_messages(
+                    session, conversation, text, out_lang, exclude_message_id=user_msg.id
+                ),
                 "text": text,
                 "in_lang": "",
                 "out_lang": out_lang,
@@ -192,7 +204,12 @@ async def stream_chat(
                 if mode == "values":
                     final_state = payload
                     continue
-                token, _meta = payload
+                token, meta = payload
+                # only stream reasoning tokens — the translate node runs a second
+                # LLM call whose tokens would otherwise duplicate the text and be
+                # spoken twice
+                if isinstance(meta, dict) and meta.get("langgraph_node") not in (None, "reason"):
+                    continue
                 content = getattr(token, "content", "")
                 if not content or not isinstance(content, str):
                     continue
@@ -223,6 +240,10 @@ async def stream_chat(
             await sink.put({"type": "error", "message": _friendly_error(e)})
             await sentence_q.put(None)
         finally:
+            try:
+                await asyncio.wait_for(asyncio.shield(worker), timeout=120)
+            except Exception:
+                pass
             reply_lang = _resolve_reply_lang(final_state, out_lang, in_lang)
             reply_text = final_state.get("reply") or reply_full
 
@@ -252,6 +273,16 @@ async def stream_chat(
                 session.commit()
 
                 done_frame["message_id"] = ai_msg.id
+
+                # persist the full reply audio so history/export keep working (F10)
+                if rendered:
+                    done_frame["audio_id"] = await asyncio.to_thread(
+                        _persist_reply_audio, session, ai_msg.id, user_id, rendered, reply_lang
+                    )
+                if spoken_chars:
+                    from app.services.cache import add_usage
+
+                    add_usage(user_id, spoken_chars)
             else:
                 # reasoning failed (e.g. LLM not configured): nothing to persist
                 done_frame["message_id"] = ""
@@ -272,13 +303,80 @@ async def stream_chat(
 
 def _friendly_error(e: Exception) -> str:
     name = type(e).__name__
+    message = str(e).lower()
+    # Provider-side account problems must not be disguised as a transient busy
+    # signal (real 429 bodies can mean "insufficient balance").
+    permanent_phrases = (
+        "insufficient balance",
+        "no resource package",
+        "recharge",
+        "quota exceeded",
+    )
+    if any(phrase in message for phrase in permanent_phrases):
+        return "The AI provider account has insufficient balance. Please top up the Z.AI account."
     if "APIConnection" in name or "httpx" in name.lower():
         return "Could not reach the AI service. Check your connection and try again."
+    if "Authentication" in name or "401" in str(e) or "invalid api key" in message:
+        return "The AI service rejected the API key. Check ZAI_API_KEY."
     if "RateLimit" in name or "429" in str(e):
         return "The AI service is busy. Please try again in a moment."
-    if "Authentication" in name or "401" in str(e):
-        return "The AI service rejected the API key. Check ZAI_API_KEY."
     return "Something went wrong while thinking. Please try again."
+
+
+def _persist_reply_audio(
+    session: Session,
+    message_id: str,
+    user_id: str,
+    rendered: list[tuple[bytes, int]],
+    lang: str,
+) -> str:
+    """Write the streamed reply as one WAV asset linked to the assistant message.
+
+    Returns the audio id ("" when nothing could be persisted)."""
+    import uuid
+
+    from app.db.models import AudioAsset
+
+    if not rendered:
+        return ""
+    sample_rate = rendered[0][1]
+    pcm = bytearray()
+    for chunk, sr in rendered:
+        if sr != sample_rate:
+            logger.warning(
+                "Mixed sample rates in one reply (%s vs %s); skipping chunk",
+                sr,
+                sample_rate,
+            )
+            continue
+        pcm.extend(chunk)
+    if not pcm:
+        return ""
+
+    watermark_id = None
+    if settings.watermark_enabled:
+        from app.audio import watermark as wm
+
+        pcm, watermark_id = wm.watermark(bytes(pcm), sample_rate)
+
+    asset_id = uuid.uuid4().hex
+    path = storage.audio_path(asset_id)
+    storage.write_wav(bytes(pcm), sample_rate, path)
+    asset = AudioAsset(
+        id=asset_id,
+        message_id=message_id,
+        user_id=user_id,
+        voice_id="",
+        lang=lang,
+        engine="",
+        path=str(path.relative_to(storage.root())),
+        duration=storage.pcm_duration(bytes(pcm), sample_rate),
+        sample_rate=sample_rate,
+        watermark_id=watermark_id,
+    )
+    session.add(asset)
+    session.commit()
+    return asset_id
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import * as React from "react";
 import { Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
-import { createConversation, getConversation, patchConversation } from "@/lib/api";
+import { createConversation, getConversation, listVoices, patchConversation } from "@/lib/api";
 import { useApp } from "@/lib/store";
 import { useConversations } from "@/lib/conversations";
 import { AudioStreamPlayer } from "@/lib/audio-engine";
@@ -51,7 +51,7 @@ interface LiveState {
 const EMPTY_LIVE: LiveState = { streaming: false, text: "", chunks: [] };
 
 export function ChatView() {
-  const { settings, updateSettings } = useApp();
+  const { settings, updateSettings, ready } = useApp();
   const { activeId, setActiveId, refresh, upsert } = useConversations();
 
   const [activeConv, setActiveConv] = React.useState<Conversation | null>(null);
@@ -65,34 +65,37 @@ export function ChatView() {
 
   const socketRef = React.useRef<ChatSocket | null>(null);
   const livePlayerRef = React.useRef<AudioStreamPlayer | null>(null);
+  /** id of the optimistic local user message awaiting its server id */
+  const pendingLocalIdRef = React.useRef<string | null>(null);
 
-  // refs so the WS handler always sees current values without reconnects
+  // refs so the WS handler always sees current values without reconnects —
+  // kept in sync after render (effects) so handlers only read committed state
   const activeConvRef = React.useRef<Conversation | null>(null);
-  activeConvRef.current = activeConv;
   const respeakingIdRef = React.useRef<string | null>(null);
-  respeakingIdRef.current = respeakingId;
   const outLangRef = React.useRef(outLang);
-  outLangRef.current = outLang;
   const speedRef = React.useRef(speed);
-  speedRef.current = speed;
   const autoPlayRef = React.useRef(settings.auto_play);
-  autoPlayRef.current = settings.auto_play;
+  React.useEffect(() => {
+    activeConvRef.current = activeConv;
+    respeakingIdRef.current = respeakingId;
+    outLangRef.current = outLang;
+    speedRef.current = speed;
+    autoPlayRef.current = settings.auto_play;
+  }, [activeConv, respeakingId, outLang, speed, settings.auto_play]);
 
   // ---- WS frame handling ----
+  // Player side effects stay OUTSIDE state updaters (updaters must be pure —
+  // React may replay them, which would double-schedule audio).
   const appendChunk = React.useCallback((b64: string, sr: number) => {
-    setLive((prev) => {
-      const next = { ...prev, chunks: [...prev.chunks, { b64, sr }] };
-      if (!livePlayerRef.current) {
-        const player = new AudioStreamPlayer();
-        player.setSpeed(speedRef.current);
-        player.onDone(() => {
-          livePlayerRef.current = null;
-        });
-        livePlayerRef.current = player;
-      }
-      livePlayerRef.current?.playChunk(b64, sr);
-      return next;
-    });
+    if (!livePlayerRef.current) {
+      const player = new AudioStreamPlayer();
+      player.setSpeed(speedRef.current);
+      player.onDone(() => {
+        livePlayerRef.current = null;
+      });
+      livePlayerRef.current = player;
+    }
+    livePlayerRef.current?.playChunk(b64, sr);
   }, []);
 
   const handleFrame = React.useCallback(
@@ -114,7 +117,7 @@ export function ChatView() {
           break;
         case "audio":
           if (autoPlayRef.current) appendChunk(frame.b64, frame.sr);
-          else setLive((p) => ({ ...p, chunks: [...p.chunks, { b64: frame.b64, sr: frame.sr }] }));
+          setLive((p) => ({ ...p, chunks: [...p.chunks, { b64: frame.b64, sr: frame.sr }] }));
           break;
         case "sentence_error":
           toast.warning(frame.message);
@@ -127,11 +130,33 @@ export function ChatView() {
           const doneFrame = frame;
           livePlayerRef.current?.markComplete();
           if (respeakingIdRef.current) {
-            // re-speak flow: reload messages to pick up the new audio asset
+            // re-speak flow: splice the new audio asset into the existing
+            // message instead of reloading the whole conversation (no flicker)
+            const respeakTargetId = respeakingIdRef.current;
             setRespeakingId(null);
-            const conv = activeConvRef.current;
-            if (conv) {
-              void getConversation(conv.id).then((data) => setMessages(data.messages));
+            if (doneFrame.audio_id) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === respeakTargetId
+                    ? {
+                        ...m,
+                        audio: [
+                          ...(m.audio ?? []),
+                          {
+                            id: doneFrame.audio_id!,
+                            message_id: m.id,
+                            voice_id: doneFrame.voice_id ?? "",
+                            lang: doneFrame.lang,
+                            engine: doneFrame.engine ?? "",
+                            duration: doneFrame.duration ?? 0,
+                            sample_rate: 24000,
+                            watermark_id: null,
+                          },
+                        ],
+                      }
+                    : m
+                )
+              );
             }
             toast.success(
               `Re-spoken${doneFrame.fallback ? ` with ${doneFrame.engine} (fallback)` : ""}`
@@ -140,32 +165,41 @@ export function ChatView() {
           }
           setLive(EMPTY_LIVE);
           if (doneFrame.message_id && doneFrame.text) {
-            setMessages((prev) => [
-              ...prev.filter((m) => !(m.id.startsWith("local-") && m.text === "")),
-              {
-                id: doneFrame.message_id,
-                role: "assistant",
-                text: doneFrame.text,
-                lang: doneFrame.lang,
-                created_at: new Date().toISOString(),
-                audio: doneFrame.audio_id
-                  ? [
-                      {
-                        id: doneFrame.audio_id,
-                        message_id: doneFrame.message_id,
-                        voice_id: doneFrame.voice_id ?? "",
-                        lang: doneFrame.lang,
-                        engine: doneFrame.engine ?? "",
-                        duration: doneFrame.duration ?? 0,
-                        sample_rate: 24000,
-                        watermark_id: null,
-                      },
-                    ]
-                  : undefined,
-                spokenWith: doneFrame.engine,
-                fallback: doneFrame.fallback,
-              },
-            ]);
+            setMessages((prev) => {
+              // swap the optimistic local user message for the persisted one
+              const next = prev.map((m) =>
+                m.id === pendingLocalIdRef.current && doneFrame.user_message_id
+                  ? { ...m, id: doneFrame.user_message_id }
+                  : m
+              );
+              pendingLocalIdRef.current = null;
+              return [
+                ...next,
+                {
+                  id: doneFrame.message_id,
+                  role: "assistant" as const,
+                  text: doneFrame.text,
+                  lang: doneFrame.lang,
+                  created_at: new Date().toISOString(),
+                  audio: doneFrame.audio_id
+                    ? [
+                        {
+                          id: doneFrame.audio_id,
+                          message_id: doneFrame.message_id,
+                          voice_id: doneFrame.voice_id ?? "",
+                          lang: doneFrame.lang,
+                          engine: doneFrame.engine ?? "",
+                          duration: doneFrame.duration ?? 0,
+                          sample_rate: 24000,
+                          watermark_id: null,
+                        },
+                      ]
+                    : undefined,
+                  spokenWith: doneFrame.engine,
+                  fallback: doneFrame.fallback,
+                },
+              ];
+            });
           }
           void refresh();
           return;
@@ -178,15 +212,25 @@ export function ChatView() {
   );
 
   const handleFrameRef = React.useRef(handleFrame);
-  handleFrameRef.current = handleFrame;
+  React.useEffect(() => {
+    handleFrameRef.current = handleFrame;
+  }, [handleFrame]);
 
   const connectSocket = React.useCallback((convId: string) => {
-    if (socketRef.current) {
-      if (socketRef.current.targetId === convId) return; // already bound
-      socketRef.current.close();
+    const current = socketRef.current;
+    if (current && current.targetId === convId) {
+      const state = current.readyState();
+      if (state === "open" || state === "connecting") return; // healthy, already bound
+      // dead socket (server restart, network drop) — replace it
+      current.close();
+      socketRef.current = null;
     }
     const sock = new ChatSocket(convId, {
       onFrame: (f) => handleFrameRef.current(f),
+      onClose: () => {
+        // drop the dead socket so the next send reconnects
+        if (socketRef.current === sock) socketRef.current = null;
+      },
     });
     sock.targetId = convId;
     socketRef.current = sock;
@@ -204,10 +248,12 @@ export function ChatView() {
     socketRef.current = null;
     livePlayerRef.current?.stop();
     livePlayerRef.current = null;
+    // intentional state reset when switching conversations
     setLive(EMPTY_LIVE);
     setRespeakingId(null);
 
     if (!activeId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on "new conversation"
       setActiveConv(null);
       setMessages([]);
       localStorage.removeItem("bohurupi.active-conv");
@@ -261,10 +307,12 @@ export function ChatView() {
           return;
         }
       }
+      const localId = `local-${Date.now()}`;
+      pendingLocalIdRef.current = localId;
       setMessages((prev) => [
         ...prev,
         {
-          id: `local-${Date.now()}`,
+          id: localId,
           role: "user",
           text,
           lang: "",
@@ -273,8 +321,7 @@ export function ChatView() {
       ]);
       setLive({ streaming: true, text: "", chunks: [], stage: "thinking" });
       connectSocket(conv.id);
-      // give the socket a tick to open if it was just created
-      await new Promise((r) => setTimeout(r, 120));
+      // send immediately — the socket queues frames while connecting
       socketRef.current?.chat(text, {
         outLang,
         voiceId: voice?.id ?? "",
@@ -287,8 +334,9 @@ export function ChatView() {
   const respeak = React.useCallback(
     (messageId: string, v: Voice) => {
       const sock = socketRef.current;
-      if (!sock) {
-        toast.error("Chat is still connecting — try again in a second");
+      if (!sock || sock.readyState() === "closed" || sock.readyState() === "none") {
+        if (activeConvRef.current) connectSocket(activeConvRef.current.id);
+        toast.error("Reconnecting — try again in a second");
         return;
       }
       setRespeakingId(messageId);
@@ -298,12 +346,38 @@ export function ChatView() {
         speed: speedRef.current,
       });
     },
-    []
+    [connectSocket]
   );
 
   const newConversation = () => setActiveId(null);
 
   const currentVoiceName = voice?.name ?? "Voice";
+
+  // adopt saved defaults once user settings arrive (initial useState snapshot
+  // happens before the async settings fetch completes)
+  const defaultsAdopted = React.useRef(false);
+  React.useEffect(() => {
+    if (defaultsAdopted.current || !ready) return;
+    defaultsAdopted.current = true;
+    setOutLang(settings.default_lang);
+    setSpeed(settings.speed);
+  }, [ready, settings.default_lang, settings.speed]);
+
+  // resolve the default voice's display name for the header button
+  React.useEffect(() => {
+    if (voice || !settings.default_voice_id) return;
+    let cancelled = false;
+    listVoices({})
+      .then((res) => {
+        if (cancelled) return;
+        const match = res.voices.find((v) => v.id === settings.default_voice_id);
+        if (match) setVoice(match);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [voice, settings.default_voice_id]);
 
   return (
     <div className="flex h-full min-h-0">
@@ -331,7 +405,7 @@ export function ChatView() {
               }
             }}
             trigger={
-              <Button variant="outline" size="sm" className="rounded-full">
+              <Button variant="outline" size="sm" className="rounded-md">
                 <Sparkles data-icon="inline-start" />
                 <span className="hidden sm:inline">
                   Reply in: {outLang === "auto" ? "Auto" : outLang}
@@ -375,7 +449,7 @@ export function ChatView() {
                             key={s}
                             variant="outline"
                             size="sm"
-                            className="rounded-full"
+                            className="rounded-md"
                             onClick={() => void send(s)}
                           >
                             {s}
@@ -389,9 +463,7 @@ export function ChatView() {
                     <MessageScrollerItem key={m.id} scrollAnchor>
                       <MessageRow
                         message={m}
-                        onRespeak={
-                          m.role === "assistant" ? (v) => respeak(m.id, v) : undefined
-                        }
+                        onRespeak={m.role === "assistant" ? respeak : undefined}
                         respeaking={respeakingId === m.id}
                       />
                     </MessageScrollerItem>

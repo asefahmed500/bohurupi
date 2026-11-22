@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy import and_
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -54,25 +55,30 @@ def list_voices(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    stmt = select(Voice).where(
-        Voice.status.in_(["ready", "pending", "moderation"])  # type: ignore[arg-type]
-    )
+    # scalar filters go into SQL; only JSON-list filters (lang/style) stay in Python
+    if mine:
+        # owners see their own clones in ready/pending/moderation (never rejected)
+        stmt = select(Voice).where(
+            and_(
+                Voice.is_preset == False,  # noqa: E712
+                Voice.owner_id == user.id,
+                Voice.status.in_(["ready", "pending", "moderation"]),  # type: ignore[arg-type]
+            )
+        )
+    else:
+        stmt = select(Voice).where(Voice.status == "ready")  # noqa: E712
+    if engine:
+        stmt = stmt.where(Voice.engine == engine)
+    if gender:
+        stmt = stmt.where(Voice.gender == gender)
+    if q:
+        stmt = stmt.where(Voice.name.ilike(f"%{q}%"))
     rows = session.exec(stmt).all()
     out = []
     for v in rows:
-        if mine and (v.is_preset or v.owner_id != user.id):
-            continue
-        if not mine and v.status != "ready":
-            continue  # others only see approved voices
         if lang and lang not in v.languages:
             continue
-        if gender and v.gender != gender:
-            continue
         if style and style not in v.styles:
-            continue
-        if engine and v.engine != engine:
-            continue
-        if q and q.lower() not in v.name.lower():
             continue
         out.append(VoiceOut.model_validate(v))
     return {"voices": out}

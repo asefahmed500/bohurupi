@@ -43,8 +43,11 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
 
   // fetch once per auth session, not per navigation
   React.useEffect(() => {
-    if (ready && user) void refresh();
-    else {
+    if (ready && user) {
+      // async fetch kicked off from the effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void refresh();
+    } else {
       setConversations([]);
       setActiveId(null);
     }

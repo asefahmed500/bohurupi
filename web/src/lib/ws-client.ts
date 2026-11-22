@@ -15,6 +15,8 @@ export class ChatSocket {
   private ws: WebSocket | null = null;
   private handlers: ChatSocketHandlers;
   private closedByUser = false;
+  /** frames queued while the socket is still opening (never silently dropped) */
+  private queue: string[] = [];
   /** conversation id this socket is bound to (guards against double-connects) */
   targetId: string;
 
@@ -34,7 +36,12 @@ export class ChatSocket {
     this.ws = new WebSocket(
       `${base}/ws/chat/${this.targetId}?token=${tokens.access_token}`
     );
-    this.ws.onopen = () => this.handlers.onOpen?.();
+    this.ws.onopen = () => {
+      // flush anything sent while the handshake was in flight
+      for (const raw of this.queue) this.ws?.send(raw);
+      this.queue = [];
+      this.handlers.onOpen?.();
+    };
     this.ws.onmessage = (event) => {
       try {
         const frame = JSON.parse(event.data as string) as WsFrame;
@@ -48,9 +55,20 @@ export class ChatSocket {
     };
   }
 
+  /** Connection state for callers deciding whether to reconnect. */
+  readyState(): "open" | "connecting" | "closed" | "none" {
+    if (!this.ws) return "none";
+    if (this.ws.readyState === WebSocket.OPEN) return "open";
+    if (this.ws.readyState === WebSocket.CONNECTING) return "connecting";
+    return "closed";
+  }
+
   send(frame: Record<string, unknown>) {
+    const raw = JSON.stringify(frame);
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(frame));
+      this.ws.send(raw);
+    } else if (this.ws?.readyState === WebSocket.CONNECTING) {
+      this.queue.push(raw);
     }
   }
 

@@ -24,7 +24,8 @@ def get_current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token expired") from e
     except jwt.InvalidTokenError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token") from e
-    user = session.get(User, payload["sub"])
+    user_id = payload.get("sub")
+    user = session.get(User, user_id) if user_id else None
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
     return user
@@ -34,6 +35,7 @@ def get_optional_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     session: Session = Depends(get_session),
 ) -> User | None:
+    """Anonymous-friendly variant: returns None instead of 401 (unused today)."""
     try:
         return get_current_user(credentials=credentials, session=session)
     except HTTPException:
@@ -56,7 +58,8 @@ def get_current_user_ws(
         payload = decode_token(token, expected_type="access")
     except jwt.InvalidTokenError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token") from e
-    user = session.get(User, payload["sub"])
+    user_id = payload.get("sub")
+    user = session.get(User, user_id) if user_id else None
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
     return user

@@ -15,7 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { AudioBar } from "./audio-bar";
 import { VoicePicker } from "./voice-picker";
 
-export function MessageRow({
+function MessageRowInner({
   message,
   onRespeak,
   respeaking,
@@ -24,7 +24,8 @@ export function MessageRow({
   fallback,
 }: {
   message: ChatMessage;
-  onRespeak?: (voice: Voice) => void;
+  /** stable callback — memoized below, keep props stable in the caller */
+  onRespeak?: (messageId: string, voice: Voice) => void;
   respeaking?: boolean;
   generating?: boolean;
   spokenWith?: string;
@@ -35,7 +36,19 @@ export function MessageRow({
   const isUser = message.role === "user";
   const lang = languages.find((l) => l.code === message.lang);
   const rtl = lang?.rtl ?? false;
-  const translation = showTranslation && message.translations ? Object.values(message.translations)[0] : null;
+
+  // prefer the user's preferred language, then English, then whatever came first
+  const translations = message.translations ?? {};
+  const translationCode =
+    (settings.default_lang !== "auto" && settings.default_lang in translations
+      ? settings.default_lang
+      : "en" in translations
+        ? "en"
+        : Object.keys(translations)[0]) ?? null;
+  const translationLang = languages.find((l) => l.code === translationCode);
+  const translation =
+    showTranslation && translationCode ? translations[translationCode] : null;
+
   const primaryAudio: AudioAsset | undefined = message.audio?.[message.audio.length - 1];
   const chunks = message.pcm && message.pcm.length > 0 ? message.pcm : undefined;
 
@@ -44,7 +57,10 @@ export function MessageRow({
       <MessageContent>
         <Bubble variant={isUser ? "default" : "outline"} align={isUser ? "end" : "start"}>
           <BubbleContent>
-            <p dir={rtl ? "rtl" : "ltr"} className="whitespace-pre-wrap">
+            <p
+              dir={translation && translationLang?.rtl ? "rtl" : rtl ? "rtl" : "ltr"}
+              className="whitespace-pre-wrap"
+            >
               {translation ?? message.text}
               {generating && !message.text && (
                 <span className="inline-flex items-center gap-1 text-muted-foreground">
@@ -53,7 +69,7 @@ export function MessageRow({
               )}
             </p>
             {generating && message.text && (
-              <span aria-hidden className="shimmer mt-1 block h-3 w-24 rounded-full" />
+              <span aria-hidden className="shimmer mt-1 block h-3 w-24 rounded-md" />
             )}
           </BubbleContent>
         </Bubble>
@@ -75,24 +91,26 @@ export function MessageRow({
                 {fallback ? `Spoken with ${spokenWith} (fallback)` : spokenWith}
               </Badge>
             )}
-            {message.translations && Object.keys(message.translations).length > 0 && (
+            {translationCode && (
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 rounded-full px-2 text-xs"
+                className="h-6 rounded-md px-2 text-xs"
                 onClick={() => setShowTranslation((v) => !v)}
               >
                 <Languages data-icon="inline-start" />
-                {showTranslation ? "Hide translation" : "Translation"}
+                {showTranslation
+                  ? "Hide translation"
+                  : `Translation${translationLang ? ` · ${translationLang.native}` : ""}`}
               </Button>
             )}
             {onRespeak && !generating && (
               <VoicePicker
                 value=""
-                onChange={(v) => onRespeak(v)}
+                onChange={(v) => onRespeak(message.id, v)}
                 title="Re-speak with another voice"
                 trigger={
-                  <Button variant="ghost" size="sm" className="h-6 rounded-full px-2 text-xs">
+                  <Button variant="ghost" size="sm" className="h-6 rounded-md px-2 text-xs">
                     <AudioLines data-icon="inline-start" />
                     Change voice
                   </Button>
@@ -104,7 +122,7 @@ export function MessageRow({
                 <Spinner className="size-3" /> Re-speaking…
               </span>
             )}
-            {settings.captions && generating && (
+            {generating && (
               <span className="sr-only" role="status">
                 Generating voice
               </span>
@@ -115,3 +133,5 @@ export function MessageRow({
     </Message>
   );
 }
+
+export const MessageRow = React.memo(MessageRowInner);

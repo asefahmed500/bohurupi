@@ -177,18 +177,25 @@ def delete_conversation(
     session: Session = Depends(get_session),
 ):
     conv = _get_own_conversation(conv_id, user, session)
+    from sqlalchemy import delete as sa_delete
+
     from app.services import storage
 
-    messages = session.exec(
-        select(Message).where(Message.conversation_id == conv.id)
+    message_ids = session.exec(
+        select(Message.id).where(Message.conversation_id == conv.id)  # type: ignore[arg-type]
     ).all()
-    for m in messages:
-        for asset in session.exec(
-            select(AudioAsset).where(AudioAsset.message_id == m.id)
-        ).all():
-            storage.audio_path(asset.id).unlink(missing_ok=True)
-            session.delete(asset)
-        session.delete(m)
+
+    # bulk-load assets once, remove files, then bulk-delete rows (no N+1)
+    asset_paths: list[str] = []
+    if message_ids:
+        assets = session.exec(
+            select(AudioAsset).where(AudioAsset.message_id.in_(message_ids))  # type: ignore[union-attr]
+        ).all()
+        asset_paths = [a.path for a in assets if a.path]
+        session.exec(sa_delete(AudioAsset).where(AudioAsset.message_id.in_(message_ids)))  # type: ignore[union-attr]
+        session.exec(sa_delete(Message).where(Message.conversation_id == conv.id))  # type: ignore[arg-type]
+    for rel in asset_paths:
+        (storage.root() / rel).unlink(missing_ok=True)
     session.delete(conv)
     session.commit()
 

@@ -45,13 +45,13 @@ npm run dev                    # http://localhost:3000
 ```
 
 The first request to a Kokoro voice auto-downloads the model (~330 MB) into
-`api/storage/models/`. `edge-tts` voices cover all 20 launch languages immediately.
+`api/storage/models/`. `edge-tts` voices cover all 55 languages immediately.
 
 ## Features (PRD v1.0 mapping)
 
 - **F1 Chat agent** — text in, streamed text + audio out (`/ws/chat/{conv_id}`)
 - **F2 Speech input** — mic recording → faster-whisper STT with auto language ID
-- **F3 Output language** — auto / fixed / per message, 20 launch languages, RTL aware
+- **F3 Output language** — auto / fixed / per message, 55 languages, RTL aware
 - **F4 Voice library** — presets by language/gender/style + my voices
 - **F5 Voice switcher** — “Change voice” on any reply; re-speak uses cached translation (no LLM)
 - **F6 Voice cloning** — 10–30 s sample with consent phrase (typed + recorded), moderation, encrypted storage
@@ -85,12 +85,34 @@ docker-compose.yml   full stack
 .env.example         all configuration
 ```
 
+## Routes
+
+- `/` — public landing page (pill nav, hero, demo card, features, CTA, footer)
+- `/login`, `/register`, `/forgot-password`, `/reset-password` — separate auth screens
+- `/chat`, `/voices`, `/voices/clone`, `/studio`, `/history`, `/settings`, `/admin` — app (auth required)
+
+In dev/staging, `/auth/demo-accounts` + `/auth/demo-login` seed a one-click demo account
+(`DEMO_EMAIL` / `DEMO_PASSWORD`); both return 404 in prod. Password reset sends via SMTP when
+configured; without SMTP the local dev flow surfaces a reset link on screen (prod fails honestly).
+
 ## Testing
 
 ```bash
-cd api && uv run pytest          # 35 tests: textprep, registry fallback, consent, API
+cd api && uv run pytest          # 74 tests: auth, db, security, fixes, textprep, registry, consent, API
 cd web && npm run build          # typed + production build
 ```
+
+Audit scripts against a running API on :8000:
+
+- `uv run python scripts/audit_api.py` — live audit: auth, RBAC, IDOR, quotas, CRUD, WS (PASS/FAIL evidence)
+- `uv run python scripts/audit_quota.py` — quota proof (start the API with `QUOTA_FREE_CHARS=100`)
+- `uv run python scripts/audit_chat_stream.py` — full chat-pipeline E2E with a local mock LLM (no real key needed)
+- `uv run python scripts/audit_ai_real.py` — full AI E2E against the real configured provider (chat, translation, re-speak, STT, voice-to-voice)
+- `uv run python scripts/audit_ai_nonllm.py` — real TTS/STT/consent verification without LLM calls
+- `uv run python scripts/audit_languages.py` — verifies all 55 languages, seeded voices, new-language TTS/translation/detection
+
+Web E2E: `cd web && npx playwright test` (expects web on :3300 + API on :8000; 22 scenarios).
+For stable runs use the production web build: `npm run build && npm run start -- --port 3300`.
 
 Engine smoke test: `uv run python scripts/test_tts.py` (writes WAVs to `api/storage/`).
 End-to-end: `uv run python scripts/test_e2e.py` against a running API (no LLM key needed).

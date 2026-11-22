@@ -4,6 +4,7 @@ Used for: translation cache (re-speak < 3s target), engine health snapshots,
 per-user rate limits and quota counters.
 """
 
+import hashlib
 import json
 import time
 from typing import Any
@@ -22,7 +23,7 @@ except Exception:  # pragma: no cover - Redis optional in dev
 
 class MemoryCache:
     def __init__(self):
-        self._data: dict[str, tuple[float, str]] = {}
+        self._data: dict[str, tuple[float | None, str]] = {}
 
     def get(self, key: str) -> str | None:
         item = self._data.get(key)
@@ -41,8 +42,14 @@ class MemoryCache:
         )
 
     def incr(self, key: str, ttl: int) -> int:
+        # keep the ORIGINAL expiry (fixed window), like Redis INCR+EXPIRE(NX):
+        # extending it on every hit would lock a user out forever.
         val = int(self.get(key) or 0) + 1
-        self.set(key, str(val), ttl)
+        item = self._data.get(key)
+        expires = item[0] if item else None
+        if not expires or expires < time.monotonic():
+            expires = time.monotonic() + ttl
+        self._data[key] = (expires, str(val))
         return val
 
     def delete(self, key: str) -> None:
@@ -100,7 +107,9 @@ class _RedisCache:
 
 
 def translation_cache_key(text: str, lang: str) -> str:
-    return f"tr:{lang}:{hash(text)}"
+    # stable across processes (Python's hash() is randomized per interpreter)
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:20]
+    return f"tr:{lang}:{digest}"
 
 
 # ---- quotas ----
@@ -118,7 +127,11 @@ def check_quota(user_id: str, plan: str, chars: int) -> bool:
 
 
 def add_usage(user_id: str, chars: int) -> int:
-    return cache().incr(quota_key(user_id), ttl=86400)
+    """Count `chars` of TTS against today's quota. Called by every synth path."""
+    key = quota_key(user_id)
+    new = int(cache().get(key) or 0) + chars
+    cache().set(key, str(new), ttl=86400)
+    return new
 
 
 # ---- rate limits (requests per window) ----

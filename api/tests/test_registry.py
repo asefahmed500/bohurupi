@@ -41,7 +41,7 @@ def _registry():
     xtts = FakeEngine("xtts", {"en"}, rank=5)
     kokoro = FakeEngine("kokoro", {"en"}, rank=10)
     edge = FakeEngine("edge", {"en", "bn", "ar"}, rank=90)
-    return Registry([edge, kokoro, xtts]), xtts, kokoro, edge
+    return Registry([edge, kokoro, xtts], persist=False), xtts, kokoro, edge
 
 
 async def test_prefers_requested_voice_engine():

@@ -13,6 +13,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlmodel import Session
+from starlette.websockets import WebSocketDisconnected
 
 from app.db.models import Conversation, Message
 from app.db.session import get_session
@@ -23,6 +24,38 @@ from app.services.chat import stream_chat, stream_respeak
 logger = logging.getLogger("bohurupi.api.ws")
 
 router = APIRouter(tags=["ws"])
+
+
+async def _ws_send(websocket: WebSocket, frame: dict) -> None:
+    """Send a frame, ignoring a client that vanished mid-stream.
+
+    Otherwise send_json raises WebSocketDisconnect and bubbles through the
+    ASGI stack as a noisy 500 (audit: failure handling)."""
+    try:
+        await websocket.send_json(frame)
+    except (WebSocketDisconnect, WebSocketDisconnected, RuntimeError):
+        pass  # the receive loop will notice the closed socket
+
+
+def _clamp_speed(value: object) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return min(2.0, max(0.5, v))
+
+
+def _clamp_pitch(value: object) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(6.0, max(-6.0, v))
+
+
+def _clean_text(value: object) -> str:
+    text = (value or "").strip()
+    return text[:8000]
 
 
 @router.websocket("/ws/chat/{conv_id}")
@@ -44,42 +77,42 @@ async def ws_chat(
         return
 
     await websocket.accept()
-    await websocket.send_json({"type": "ready", "conversation_id": conv.id})
+    await _ws_send(websocket,{"type": "ready", "conversation_id": conv.id})
 
     busy = False
 
     while True:
         try:
             raw = await websocket.receive_text()
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, WebSocketDisconnected):
             break
 
         try:
             data = json.loads(raw)
         except ValueError:
-            await websocket.send_json({"type": "error", "message": "Invalid JSON frame"})
+            await _ws_send(websocket,{"type": "error", "message": "Invalid JSON frame"})
             continue
 
         frame_type = data.get("type")
         if frame_type == "ping":
-            await websocket.send_json({"type": "pong"})
+            await _ws_send(websocket,{"type": "pong"})
             continue
         if busy:
-            await websocket.send_json(
+            await _ws_send(websocket,
                 {"type": "error", "message": "A response is already streaming."}
             )
             continue
 
         if frame_type == "chat":
-            text = (data.get("text") or "").strip()
+            text = _clean_text(data.get("text"))
             if not text:
-                await websocket.send_json({"type": "error", "message": "Empty message"})
+                await _ws_send(websocket,{"type": "error", "message": "Empty message"})
                 continue
             if not cache_svc.allow_rate(user.id, "chat", 60, 60):
-                await websocket.send_json({"type": "error", "message": "Too many messages"})
+                await _ws_send(websocket,{"type": "error", "message": "Too many messages"})
                 continue
             if not cache_svc.check_quota(user.id, user.plan, len(text)):
-                await websocket.send_json(
+                await _ws_send(websocket,
                     {"type": "error", "message": "Daily quota reached. Upgrade to continue."}
                 )
                 continue
@@ -93,14 +126,14 @@ async def ws_chat(
                     text,
                     out_lang=data.get("out_lang") or conv.default_lang or "auto",
                     voice_id=data.get("voice_id") or conv.default_voice_id or "",
-                    speed=float(data.get("speed") or 1.0),
+                    speed=_clamp_speed(data.get("speed")),
                     style=data.get("style"),
                     effect=data.get("effect"),
                 ):
-                    await websocket.send_json(frame)
+                    await _ws_send(websocket,frame)
             except Exception:
                 logger.exception("WS chat failed")
-                await websocket.send_json(
+                await _ws_send(websocket,
                     {"type": "error", "message": "Something went wrong. Please try again."}
                 )
             finally:
@@ -108,12 +141,12 @@ async def ws_chat(
 
         elif frame_type == "speak":
             # Direct TTS preview (Voice Studio) — no LLM round trip
-            text = (data.get("text") or "").strip()
+            text = _clean_text(data.get("text"))
             if not text:
-                await websocket.send_json({"type": "error", "message": "Empty text"})
+                await _ws_send(websocket,{"type": "error", "message": "Empty text"})
                 continue
             if not cache_svc.check_quota(user.id, user.plan, len(text)):
-                await websocket.send_json(
+                await _ws_send(websocket,
                     {"type": "error", "message": "Daily quota reached. Upgrade to continue."}
                 )
                 continue
@@ -131,12 +164,12 @@ async def ws_chat(
                     voice_id=data.get("voice_id") or "",
                     message_id=None,
                     user_id=user.id,
-                    speed=float(data.get("speed") or 1.0),
+                    speed=_clamp_speed(data.get("speed")),
                     style=data.get("style"),
                     effect=data.get("effect"),
-                    pitch_semitones=float(data.get("pitch_semitones") or 0.0),
+                    pitch_semitones=_clamp_pitch(data.get("pitch_semitones")),
                 )
-                await websocket.send_json(
+                await _ws_send(websocket,
                     {
                         "type": "sentence_start",
                         "text": text,
@@ -151,7 +184,7 @@ async def ws_chat(
                 seq = 0
                 for i in range(0, len(pcm), step):
                     seq += 1
-                    await websocket.send_json(
+                    await _ws_send(websocket,
                         {
                             "type": "audio",
                             "seq": seq,
@@ -159,7 +192,7 @@ async def ws_chat(
                             "b64": b64mod.b64encode(pcm[i : i + step]).decode(),
                         }
                     )
-                await websocket.send_json(
+                await _ws_send(websocket,
                     {
                         "type": "done",
                         "message_id": "",
@@ -174,7 +207,7 @@ async def ws_chat(
                 )
             except Exception:
                 logger.exception("WS speak failed")
-                await websocket.send_json(
+                await _ws_send(websocket,
                     {"type": "error", "message": "Could not synthesize this preview."}
                 )
             finally:
@@ -183,11 +216,11 @@ async def ws_chat(
         elif frame_type == "respeak":
             message = session.get(Message, data.get("message_id") or "")
             if message is None or message.role != "assistant":
-                await websocket.send_json({"type": "error", "message": "Message not found"})
+                await _ws_send(websocket,{"type": "error", "message": "Message not found"})
                 continue
             msg_conv = session.get(Conversation, message.conversation_id)
             if msg_conv is None or msg_conv.user_id != user.id:
-                await websocket.send_json({"type": "error", "message": "Message not found"})
+                await _ws_send(websocket,{"type": "error", "message": "Message not found"})
                 continue
 
             busy = True
@@ -198,18 +231,18 @@ async def ws_chat(
                     user.id,
                     voice_id=data.get("voice_id") or "",
                     lang=data.get("lang") or "",
-                    speed=float(data.get("speed") or 1.0),
+                    speed=_clamp_speed(data.get("speed")),
                     style=data.get("style"),
                     effect=data.get("effect"),
-                    pitch_semitones=float(data.get("pitch_semitones") or 0.0),
+                    pitch_semitones=_clamp_pitch(data.get("pitch_semitones")),
                 ):
-                    await websocket.send_json(frame)
+                    await _ws_send(websocket,frame)
             except Exception:
                 logger.exception("WS respeak failed")
-                await websocket.send_json(
+                await _ws_send(websocket,
                     {"type": "error", "message": "Re-speak failed. Please try again."}
                 )
             finally:
                 busy = False
         else:
-            await websocket.send_json({"type": "error", "message": f"Unknown frame '{frame_type}'"})
+            await _ws_send(websocket,{"type": "error", "message": f"Unknown frame '{frame_type}'"})

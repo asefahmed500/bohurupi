@@ -49,10 +49,29 @@ class Settings(BaseSettings):
     watermark_enabled: bool = True
     max_upload_mb: int = 20
 
+    # ---- Password reset (SMTP) ----
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "Bohurupi <no-reply@bohurupi.dev>"
+    smtp_tls: bool = True
+
+    # ---- Demo account (dev/staging only) ----
+    demo_email: str = "demo@bohurupi.dev"
+    demo_password: str = "DemoPass123!"
+    demo_name: str = "Demo user"
+    demo_enabled_flag: bool = True
+
     # ---- Plan quotas (TTS chars / day) ----
     quota_free_chars: int = 20_000
     quota_pro_chars: int = 200_000
     quota_studio_chars: int = 1_000_000
+
+    @property
+    def demo_enabled(self) -> bool:
+        """Demo account + login dropdown exist only outside prod (never a backdoor in prod)."""
+        return self.demo_enabled_flag and self.env != "prod"
 
     @property
     def cors_origin_list(self) -> list[str]:

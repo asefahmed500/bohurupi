@@ -67,7 +67,7 @@ export function Composer({
             <Button
               type="submit"
               size="icon-lg"
-              className="ml-auto rounded-full"
+              className="ml-auto rounded-md"
               disabled={disabled || busy || !text.trim()}
               aria-label="Send message"
             >

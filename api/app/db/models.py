@@ -63,6 +63,7 @@ class Message(SQLModel, table=True):
 class AudioAsset(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
     message_id: str | None = Field(foreign_key="message.id", index=True)
+    user_id: str | None = Field(foreign_key="user.id", index=True, default=None)
     voice_id: str = ""
     lang: str = ""
     engine: str = ""
@@ -127,3 +128,10 @@ class UsageEvent(SQLModel, table=True):
     chars: int = 0
     seconds: float = 0.0
     created_at: datetime = Field(default_factory=_now, index=True)
+
+
+class EngineState(SQLModel, table=True):
+    """Admin enable/disable per TTS engine — survives restarts (FR-9)."""
+
+    name: str = Field(primary_key=True)
+    enabled: bool = True

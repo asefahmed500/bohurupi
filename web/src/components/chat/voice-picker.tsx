@@ -51,6 +51,7 @@ function VoiceRow({
   return (
     <button
       type="button"
+      aria-pressed={selected}
       onClick={() => onSelect(voice)}
       className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors ${
         selected
@@ -94,6 +95,8 @@ function VoiceList({
 
   React.useEffect(() => {
     let cancelled = false;
+    // loading placeholder reset per filter change
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVoices(null);
     listVoices({ lang: langFilter === "all" ? undefined : langFilter })
       .then((res) => {
@@ -267,7 +270,7 @@ export function VoicePickerButton({
       value={value}
       onChange={onChange}
       trigger={
-        <Button variant="outline" size="sm" className="rounded-full">
+        <Button variant="outline" size="sm">
           <Mic data-icon="inline-start" />
           <span className="max-w-32 truncate">{voiceName ?? "Voice"}</span>
         </Button>
