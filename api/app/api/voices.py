@@ -287,6 +287,12 @@ async def train_voice_endpoint(
 
     try:
         job = await asyncio.to_thread(train_voice, session, voice_id)
+        from app.services.automation import emit_event
+
+        emit_event(
+            "voice.trained",
+            {"voice_id": voice_id, "version": job.version, "features": job.features},
+        )
         return {
             "job_id": job.id,
             "voice_id": voice_id,

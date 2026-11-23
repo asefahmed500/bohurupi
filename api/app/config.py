@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     mcp_api_key: str = ""
     mcp_servers_json: str = ""  # outbound MCP servers for the agent's tool loop
 
+    # ---- Automation ----
+    chat_retention_days: int = 0  # 0 = keep forever; N = auto-delete older conversations
+    webhook_timeout_s: int = 10
+    webhook_allow_private: bool = False  # dev/testing only: allow localhost webhook targets
+
     # ---- Demo account (dev/staging only) ----
     demo_email: str = "demo@bohurupi.dev"
     demo_password: str = "DemoPass123!"

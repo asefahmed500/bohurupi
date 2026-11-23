@@ -57,9 +57,7 @@ class RespeakIn(BaseModel):
 # ---- helpers ----
 
 
-def _get_own_conversation(
-    conv_id: str, user: User, session: Session
-) -> Conversation:
+def _get_own_conversation(conv_id: str, user: User, session: Session) -> Conversation:
     conv = session.get(Conversation, conv_id)
     if conv is None or conv.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
@@ -170,34 +168,32 @@ def patch_conversation(
     return conv
 
 
+@router.delete("/conversations", status_code=200)
+def clear_history(
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Delete ALL of the current user's conversations, messages and audio."""
+    from app.services.automation import emit_event
+    from app.services.conversation_cleanup import clear_user_history
+
+    count = clear_user_history(session, user.id)
+    emit_event("conversation.deleted", {"user_id": user.id, "bulk": True, "count": count})
+    return {"deleted": count}
+
+
 @router.delete("/conversations/{conv_id}", status_code=204)
 def delete_conversation(
     conv_id: str,
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    from app.services.automation import emit_event
+    from app.services.conversation_cleanup import delete_conversation_cascade
+
     conv = _get_own_conversation(conv_id, user, session)
-    from sqlalchemy import delete as sa_delete
-
-    from app.services import storage
-
-    message_ids = session.exec(
-        select(Message.id).where(Message.conversation_id == conv.id)  # type: ignore[arg-type]
-    ).all()
-
-    # bulk-load assets once, remove files, then bulk-delete rows (no N+1)
-    asset_paths: list[str] = []
-    if message_ids:
-        assets = session.exec(
-            select(AudioAsset).where(AudioAsset.message_id.in_(message_ids))  # type: ignore[union-attr]
-        ).all()
-        asset_paths = [a.path for a in assets if a.path]
-        session.exec(sa_delete(AudioAsset).where(AudioAsset.message_id.in_(message_ids)))  # type: ignore[union-attr]
-        session.exec(sa_delete(Message).where(Message.conversation_id == conv.id))  # type: ignore[arg-type]
-    for rel in asset_paths:
-        (storage.root() / rel).unlink(missing_ok=True)
-    session.delete(conv)
-    session.commit()
+    delete_conversation_cascade(session, conv)
+    emit_event("conversation.deleted", {"conversation_id": conv_id, "user_id": user.id})
 
 
 # ---- chat (SSE) ----

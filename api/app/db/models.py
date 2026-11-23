@@ -201,3 +201,25 @@ class VoiceTrainingJob(SQLModel, table=True):
     error: str | None = None
     created_at: datetime = Field(default_factory=_now)
     finished_at: datetime | None = None
+
+
+class Webhook(SQLModel, table=True):
+    """Outbound automation: signed HTTP callback on real app events."""
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    owner_id: str = Field(foreign_key="user.id", index=True)
+    url: str
+    events: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    secret: str
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=_now)
+
+
+class WebhookDelivery(SQLModel, table=True):
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    webhook_id: str = Field(foreign_key="webhook.id", index=True)
+    event: str
+    status_code: int | None = None
+    ok: bool = False
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)

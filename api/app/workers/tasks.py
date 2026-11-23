@@ -63,6 +63,12 @@ async def train_voice_job(ctx: dict, payload: dict) -> dict:
             return {"voice_id": voice_id, "status": "failed", "error": str(e)[:200]}
 
 
+async def nightly_cleanup(ctx: dict) -> dict:
+    from app.services.conversation_cleanup import cleanup_expired_conversations
+
+    return {"deleted_conversations": cleanup_expired_conversations()}
+
+
 async def nightly_voice_improvement(ctx: dict) -> dict:
     """Re-train every approved cloned voice once per day (self-improvement)."""
     with Session(engine) as session:
@@ -80,13 +86,16 @@ async def nightly_voice_improvement(ctx: dict) -> dict:
 
 
 class WorkerSettings:
-    functions = [synthesize_job, train_voice_job, nightly_voice_improvement]
+    functions = [synthesize_job, train_voice_job, nightly_voice_improvement, nightly_cleanup]
     redis_settings = None  # set below from settings
     max_jobs = 4
     job_timeout = 600
     keep_result = 3600
     # daily self-improvement: re-learn each cloned voice's acoustic profile
-    cron_jobs = [cron(nightly_voice_improvement, hour=3, minute=0, run_at_startup=False)]
+    cron_jobs = [
+        cron(nightly_voice_improvement, hour=3, minute=0, run_at_startup=False),
+        cron(nightly_cleanup, hour=4, minute=0, run_at_startup=False),
+    ]
 
 
 def _init_worker_settings() -> None:

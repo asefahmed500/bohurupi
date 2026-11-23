@@ -324,6 +324,26 @@ export const voiceTraining = (id: string) =>
     jobs: { id: string; status: string; version: number; error: string | null }[];
   }>(`/voices/${id}/training`);
 
+export const clearHistory = () => api<{ deleted: number }>("/conversations", { method: "DELETE" });
+
+export type WebhookEvent = "message.created" | "ticket.created" | "voice.trained" | "voice.moderated" | "conversation.deleted";
+
+export const webhookEvents = () => api<{ events: WebhookEvent[] }>("/automations/events");
+export const listWebhooks = () =>
+  api<{ webhooks: { id: string; url: string; events: WebhookEvent[]; is_active: boolean; secret: string }[] }>("/automations/webhooks");
+export const createWebhook = (body: { url: string; events: WebhookEvent[] }) =>
+  api<{ id: string; url: string; events: WebhookEvent[]; secret: string }>("/automations/webhooks", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const deleteWebhook = (id: string) => api<void>(`/automations/webhooks/${id}`, { method: "DELETE" });
+export const testWebhook = (id: string) =>
+  api<{ ok: boolean; status_code: number | null; error: string | null }>(`/automations/webhooks/${id}/test`, {
+    method: "POST",
+  });
+export const webhookDeliveries = (id: string) =>
+  api<{ deliveries: { id: string; event: string; ok: boolean; status_code: number | null; error: string | null; created_at: string }[] }>(`/automations/webhooks/${id}/deliveries`);
+
 // ---- admin ----
 
 export const adminEngines = () => api<{ engines: EngineStatus[] }>("/admin/engines");

@@ -208,6 +208,12 @@ async def support_chat(
         session.add(ticket)
         session.commit()
         session.refresh(ticket)
+        from app.services.automation import emit_event
+
+        emit_event(
+            "ticket.created",
+            {"ticket_id": ticket.id, "business_id": biz.id, "subject": ticket.subject},
+        )
         return {"ticket_id": ticket.id, "status": ticket.status}
 
     escalate = StructuredTool.from_function(

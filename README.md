@@ -99,8 +99,12 @@ configured; without SMTP the local dev flow surfaces a reset link on screen (pro
 
 - `/support` — knowledge-grounded support chat for any configured business, in any language,
   with LLM-driven human escalation that creates a real `SupportTicket`.
-- Admin → Businesses / Tickets — create a tenant, index documents (chunked + hashed TF-IDF
-  retrieval), manage escalations.
+- Admin → Businesses / Tickets / Automations — create a tenant, index documents (hashed TF-IDF
+  retrieval), manage escalations, subscribe HMAC-signed webhooks to real events.
+- History → **Clear all** deletes every conversation, message and WAV for the current user.
+  `CHAT_RETENTION_DAYS=N` auto-deletes older conversations (worker cron + boot cleanup).
+- Webhook deliveries carry `X-Bohurupi-Signature: sha256=<hmac>` and are logged; verify with
+  the subscription secret. `WEBHOOK_ALLOW_PRIVATE` is for local testing only.
 - `POST /voices/{id}/train` — learns a voice-adaptation profile from consented samples;
   a nightly ARQ cron job retrains every approved cloned voice (`profile_version` increases).
   The adapter applies measured pitch/speed characteristics to synthesis; it is **voice

@@ -274,6 +274,18 @@ async def stream_chat(
 
                 done_frame["message_id"] = ai_msg.id
 
+                from app.services.automation import emit_event
+
+                emit_event(
+                    "message.created",
+                    {
+                        "message_id": ai_msg.id,
+                        "conversation_id": conversation.id,
+                        "user_id": user_id,
+                        "lang": reply_lang,
+                    },
+                )
+
                 # persist the full reply audio so history/export keep working (F10)
                 if rendered:
                     done_frame["audio_id"] = await asyncio.to_thread(

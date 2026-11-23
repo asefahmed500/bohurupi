@@ -205,17 +205,26 @@ async def main() -> None:
         r = await c.post(f"{BASE}/admin/voices/{cloned_id}/moderate", headers=aa, json={"decision": "bogus"})
         record("admin", "bogus decision 400", r.status_code == 400, str(r.status_code))
 
-        # ---------- WS respeak + chat error honesty ----------
+        # ---------- WS chat (real LLM when key configured) + respeak ----------
         uri = f"ws://localhost:8000/ws/chat/{conv_a}?token={user_tok}"
         async with websockets.connect(uri) as ws:
-            await ws.send(json.dumps({"type": "chat", "text": "hello"}))
+            await ws.send(json.dumps({"type": "chat", "text": "Say hello in one short sentence.", "out_lang": "en"}))
             frames = []
             while True:
-                fr = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
-                frames.append(fr["type"])
+                fr = json.loads(await asyncio.wait_for(ws.recv(), timeout=90))
+                frames.append(fr)
                 if fr["type"] in ("done", "error"):
-                    record("chat", "chat without LLM key errors honestly", fr["type"] == "error", json.dumps(fr)[:160])
+                    final = fr
                     break
+            record(
+                "chat",
+                "WS chat streams real reply with message+audio ids",
+                final["type"] == "done"
+                and bool(final.get("message_id"))
+                and any(f["type"] == "text_token" for f in frames)
+                and any(f["type"] == "audio" for f in frames),
+                json.dumps(final)[:160],
+            )
         # respeak needs an assistant message; without LLM there is none — expect a clear error
         async with websockets.connect(uri) as ws:
             ready = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
@@ -244,15 +253,15 @@ async def main() -> None:
         r = await c.post(f"{BASE}/stt", files={"file": ("a.wav", wav_bytes(2), "audio/wav")})
         record("stt", "unauthenticated 401", r.status_code == 401, str(r.status_code))
 
-        # ---------- rate limits ----------
-        r = await c.post(f"{BASE}/auth/register", json={"email": f"rl-{stamp}@x.com", "password": "supersecret1"})
-        tok = r.json()["access_token"]
-        rl_conv = (await c.post(f"{BASE}/conversations", headers={"Authorization": f"Bearer {tok}"}, json={"title": "RL"})).json()["id"]
+        # ---------- rate limits (login per-email: 20 attempts / 15 min) ----------
         codes = []
-        for _ in range(65):
-            rr = await c.post(f"{BASE}/chat", headers={"Authorization": f"Bearer {tok}"}, json={"text": "hi", "conversation_id": rl_conv})
+        for _ in range(23):
+            rr = await c.post(
+                f"{BASE}/auth/login",
+                json={"email": f"rl-{stamp}@x.com", "password": "wrong-password"},
+            )
             codes.append(rr.status_code)
-        record("limits", "REST /chat rate limited", 429 in codes, f"codes={set(codes)}")
+        record("limits", "login rate limited (429)", 429 in codes, f"codes={set(codes)}")
 
         # ---------- conversation delete cascades audio ----------
         r = await c.delete(f"{BASE}/conversations/{conv_a}", headers=ua)

@@ -7,7 +7,13 @@ import { useRouter } from "next/navigation";
 import { ArrowDownToLine, MessageCircle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { deleteConversation, downloadAudio, getConversation, listConversations } from "@/lib/api";
+import {
+  clearHistory,
+  deleteConversation,
+  downloadAudio,
+  getConversation,
+  listConversations,
+} from "@/lib/api";
 import { useConversations } from "@/lib/conversations";
 import type { Conversation } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -94,6 +100,25 @@ export default function HistoryPage() {
       <PageHeader
         title="History"
         description="Every conversation and generated audio, searchable and exportable."
+        actions={
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!conversations || conversations.length === 0}
+            onClick={() => {
+              if (!confirm("Delete ALL your chat history? This cannot be undone.")) return;
+              void clearHistory()
+                .then((res) => {
+                  toast.success(`Deleted ${res.deleted} conversation(s)`);
+                  return load();
+                })
+                .catch(() => toast.error("Could not clear history"));
+            }}
+          >
+            <Trash2 data-icon="inline-start" />
+            Clear all
+          </Button>
+        }
       />
 
       <Input

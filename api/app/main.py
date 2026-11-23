@@ -10,7 +10,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.api import admin, audio, auth, chat, meta, stt, support, voices, ws
+from app.api import admin, audio, auth, automation, chat, meta, stt, support, voices, ws
 from app.config import settings
 from app.mcp_server import create_mcp_server
 from app.security import assert_security_config
@@ -23,21 +23,21 @@ class McpApiKeyMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] == "http"
-            and scope["path"].startswith("/mcp")
-            and settings.mcp_api_key
-        ):
+        if scope["type"] == "http" and scope["path"].startswith("/mcp") and settings.mcp_api_key:
             headers = dict(scope.get("headers", []))
             supplied = headers.get(b"x-mcp-api-key", b"").decode("utf-8", "ignore")
             if supplied != settings.mcp_api_key:
                 body = b'{"detail":"Invalid MCP API key"}'
-                await send({
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"application/json"),
-                                (b"content-length", str(len(body)).encode())],
-                })
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode()),
+                        ],
+                    }
+                )
                 await send({"type": "http.response.body", "body": body})
                 return
         await self.app(scope, receive, send)
@@ -87,6 +87,9 @@ async def lifespan(app: FastAPI):
 
     init_db()
     _cleanup_stale_previews()
+    from app.services.conversation_cleanup import cleanup_expired_conversations
+
+    cleanup_expired_conversations()
     # warm Kokoro in the background (model download/load must not block boot)
     registry = get_registry()
     for engine in registry.engines:
@@ -174,6 +177,7 @@ def create_app() -> FastAPI:
     app.include_router(audio.router)
     app.include_router(admin.router)
     app.include_router(support.router)
+    app.include_router(automation.router)
     app.include_router(ws.router)
 
     if settings.mcp_api_key:

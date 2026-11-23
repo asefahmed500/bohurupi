@@ -61,6 +61,26 @@ test.describe("history", () => {
     });
     expect(gone.status()).toBe(404);
   });
+
+  test("clear all history deletes every conversation", async ({ page, request }) => {
+    page.on("dialog", (dialog) => void dialog.accept());
+    const email = freshEmail();
+    await registerViaUi(page, email);
+    const tokens = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("bohurupi.auth") ?? "{}")
+    );
+    for (const title of ["First conversation", "Second conversation"]) {
+      await request.post(`${API}/conversations`, {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+        data: { title },
+      });
+    }
+    await page.goto("/history");
+    await expect(page.getByText("First conversation")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: /Clear all/ }).click();
+    await expect(page.getByText("First conversation")).toHaveCount(0);
+    await expect(page.getByText("Second conversation")).toHaveCount(0);
+  });
 });
 
 test.describe("admin", () => {
@@ -104,5 +124,10 @@ test.describe("admin", () => {
     // moderation tab renders (empty state for a clean DB)
     await page.getByRole("tab", { name: /Moderation/ }).click();
     await expect(page.getByText("No voices waiting for review.")).toBeVisible();
+
+    // automations tab exposes webhook subscriptions
+    await page.getByRole("tab", { name: "Automations" }).click();
+    await expect(page.getByText("New webhook")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add webhook" })).toBeVisible();
   });
 });

@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
+import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -12,6 +13,10 @@ import {
   adminBusinesses,
   adminTickets,
   createBusiness,
+  createWebhook,
+  deleteWebhook,
+  listWebhooks,
+  testWebhook,
   patchTicket,
   adminEngines,
   adminPendingVoices,
@@ -86,10 +91,13 @@ export default function AdminPage() {
   const [docContent, setDocContent] = React.useState("");
   const [businesses, setBusinesses] = React.useState<Awaited<ReturnType<typeof adminBusinesses>>["businesses"]>([]);
   const [tickets, setTickets] = React.useState<Awaited<ReturnType<typeof adminTickets>>["tickets"]>([]);
+  const [webhooks, setWebhooks] = React.useState<Awaited<ReturnType<typeof listWebhooks>>["webhooks"]>([]);
+  const [hookUrl, setHookUrl] = React.useState("");
+  const [hookEvent, setHookEvent] = React.useState("message.created");
 
   const loadAll = React.useCallback(async () => {
     try {
-      const [e, u, s, pv, usersRes, bizRes, ticketRes] = await Promise.all([
+      const [e, u, s, pv, usersRes, bizRes, ticketRes, hookRes] = await Promise.all([
         adminEngines(),
         adminUsage(30),
         adminStats(),
@@ -97,6 +105,7 @@ export default function AdminPage() {
         adminUsers(),
         adminBusinesses(),
         adminTickets(),
+        listWebhooks(),
       ]);
       setEngines(e.engines);
       setUsage(u);
@@ -105,6 +114,7 @@ export default function AdminPage() {
       setUsers(usersRes.users);
       setBusinesses(bizRes.businesses);
       setTickets(ticketRes.tickets);
+      setWebhooks(hookRes.webhooks);
     } catch {
       toast.error("Could not load admin data");
     }
@@ -196,6 +206,7 @@ export default function AdminPage() {
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="businesses">Businesses</TabsTrigger>
           <TabsTrigger value="tickets">Tickets{tickets.length > 0 ? ` (${tickets.length})` : ""}</TabsTrigger>
+          <TabsTrigger value="automations">Automations</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -443,6 +454,93 @@ export default function AdminPage() {
                   ))}
                 </TableBody>
               </Table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {tab === "automations" && (
+        <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_1.4fr]">
+          <Card className="bg-gradient-card">
+            <CardHeader>
+              <CardTitle className="text-base">New webhook</CardTitle>
+              <CardDescription>
+                Signed HTTP callbacks when real events happen (HMAC-SHA256).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <Input
+                value={hookUrl}
+                onChange={(e) => setHookUrl(e.target.value)}
+                placeholder="https://your-system.example/hooks/bohurupi"
+                aria-label="Webhook URL"
+              />
+              <Select value={hookEvent} onValueChange={(v) => setHookEvent(String(v ?? ""))}>
+                <SelectTrigger aria-label="Event"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["message.created", "ticket.created", "voice.trained", "voice.moderated", "conversation.deleted"].map((ev) => (
+                    <SelectItem key={ev} value={ev}>{ev}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                className="w-full"
+                disabled={!hookUrl.trim()}
+                onClick={() => {
+                  void createWebhook({ url: hookUrl, events: [hookEvent as never] })
+                    .then(() => {
+                      toast.success("Webhook created — copy its secret for signature verification");
+                      setHookUrl("");
+                      return loadAll();
+                    })
+                    .catch((e) => toast.error(e instanceof Error ? e.message : "Failed"));
+                }}
+              >
+                Add webhook
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-gradient-card">
+            <CardHeader><CardTitle className="text-base">Subscriptions</CardTitle></CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {webhooks.length === 0 && (
+                <p className="text-sm text-muted-foreground">No webhooks configured yet.</p>
+              )}
+              {webhooks.map((h) => (
+                <div key={h.id} className="flex flex-wrap items-center gap-2 rounded-md border p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium">{h.url}</p>
+                    <p className="text-xs text-muted-foreground">{h.events.join(", ")}</p>
+                    <p className="truncate font-mono text-[10px] text-muted-foreground">secret: {h.secret.slice(0, 12)}…</p>
+                  </div>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => {
+                      void testWebhook(h.id)
+                        .then((res) =>
+                          toast[res.ok ? "success" : "error"](
+                            res.ok ? `Delivered (HTTP ${res.status_code})` : `Failed: ${res.error ?? "unknown"}`
+                          )
+                        )
+                        .catch(() => toast.error("Test failed"));
+                    }}
+                  >
+                    Test
+                  </Button>
+                  <Button
+                    size="icon-xs"
+                    variant="destructive"
+                    aria-label="Delete webhook"
+                    onClick={() => {
+                      void deleteWebhook(h.id).then(() => loadAll());
+                    }}
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+              ))}
             </CardContent>
           </Card>
         </div>

@@ -131,6 +131,13 @@ def moderate_voice(
     session.add(voice)
     session.commit()
     session.refresh(voice)
+
+    from app.services.automation import emit_event
+
+    emit_event(
+        "voice.moderated",
+        {"voice_id": voice.id, "status": voice.status, "decision": body.decision},
+    )
     return voice
 
 
