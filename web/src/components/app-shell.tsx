@@ -18,6 +18,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   AudioLines,
   Clock,
+  LifeBuoy,
   MessageCircle,
   Mic,
   Plus,
@@ -50,6 +51,7 @@ import {
 
 const NAV = [
   { href: "/chat", label: "Chat", icon: MessageCircle },
+  { href: "/support", label: "Support", icon: LifeBuoy },
   { href: "/voices", label: "Voices", icon: Mic },
   { href: "/studio", label: "Studio", icon: AudioLines },
   { href: "/history", label: "History", icon: Clock },

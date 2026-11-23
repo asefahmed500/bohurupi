@@ -7,7 +7,7 @@ import Link from "next/link";
 import { Heart, Mic, Play, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { deleteVoice, listVoices } from "@/lib/api";
+import { deleteVoice, listVoices, trainVoice } from "@/lib/api";
 import { speakPreview } from "@/lib/speak";
 import { AudioStreamPlayer } from "@/lib/audio-engine";
 import { useApp } from "@/lib/store";
@@ -67,6 +67,7 @@ export default function VoicesPage() {
   const [lang, setLang] = React.useState("all");
   const [gender, setGender] = React.useState("all");
   const [previewingId, setPreviewingId] = React.useState<string | null>(null);
+  const [trainingId, setTrainingId] = React.useState<string | null>(null);
   const [favoritesOnly, setFavoritesOnly] = React.useState(false);
   const [favorites, setFavorites] = React.useState<string[]>(() => {
     try {
@@ -156,6 +157,19 @@ export default function VoicesPage() {
       localStorage.setItem("bohurupi.fav-voices", JSON.stringify(next));
       return next;
     });
+  };
+
+  const train = async (id: string) => {
+    setTrainingId(id);
+    try {
+      const res = await trainVoice(id);
+      toast.success(`Voice profile v${res.version} trained from your consented samples`);
+      void load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Training failed");
+    } finally {
+      setTrainingId(null);
+    }
   };
 
   return (
@@ -294,6 +308,16 @@ export default function VoicesPage() {
                       <Badge variant="outline" className="capitalize">
                         {v.status}
                       </Badge>
+                    )}
+                    {!v.is_preset && (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        loading={trainingId === v.id}
+                        onClick={() => void train(v.id)}
+                      >
+                        Train voice
+                      </Button>
                     )}
                     <Button
                       size="icon-sm"

@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     smtp_from: str = "Bohurupi <no-reply@bohurupi.dev>"
     smtp_tls: bool = True
 
+    # ---- MCP ----
+    mcp_api_key: str = ""
+    mcp_servers_json: str = ""  # outbound MCP servers for the agent's tool loop
+
     # ---- Demo account (dev/staging only) ----
     demo_email: str = "demo@bohurupi.dev"
     demo_password: str = "DemoPass123!"

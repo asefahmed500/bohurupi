@@ -17,6 +17,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.types import RetryPolicy
 
+from app.agent.mcp_tools import get_mcp_tools
 from app.agent.tools import get_tools, translate_text
 
 logger = logging.getLogger("bohurupi.agent.graph")
@@ -82,7 +83,7 @@ async def reason(state: AgentState, config: RunnableConfig) -> dict:
     from app.agent.llm import get_llm
 
     llm = get_llm()
-    tools = get_tools()
+    tools = get_tools() + await get_mcp_tools()
     llm_bound = llm.bind_tools(tools) if tools else llm
     ai_msg = await llm_bound.ainvoke(state["messages"], config=config)
     return {"messages": [ai_msg]}
@@ -96,7 +97,7 @@ def route_after_reason(state: AgentState) -> Literal["tools", "translate"]:
 
 
 async def _tool_node(state: AgentState) -> dict:
-    tool_node = ToolNode(get_tools(), handle_tool_errors=True)
+    tool_node = ToolNode(get_tools() + await get_mcp_tools(), handle_tool_errors=True)
     return await tool_node.ainvoke(state)
 
 

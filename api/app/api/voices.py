@@ -1,5 +1,6 @@
 """Voice library, cloning with consent gate (FR-6), deletion (privacy)."""
 
+import asyncio
 import io
 import logging
 from pathlib import Path
@@ -10,7 +11,7 @@ from sqlalchemy import and_
 from sqlmodel import Session, select
 
 from app.config import settings
-from app.db.models import Consent, User, Voice
+from app.db.models import Consent, User, Voice, VoiceTrainingJob
 from app.db.session import get_session
 from app.deps import get_current_user
 from app.services import cache as cache_svc
@@ -264,3 +265,66 @@ def download_sample(
         media_type="audio/wav",
         headers={"Content-Disposition": f'attachment; filename="{voice.name}-sample.wav"'},
     )
+
+
+# ---- voice training / daily self-improvement ----
+
+
+@router.post("/{voice_id}/train")
+async def train_voice_endpoint(
+    voice_id: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Learn an acoustic adaptation profile from the consented voice sample."""
+    voice = session.get(Voice, voice_id)
+    if voice is None or (voice.owner_id != user.id and user.role != "admin"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Voice not found")
+    if voice.is_preset:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Preset voices need no training")
+
+    from app.services.voice_profile import train_voice
+
+    try:
+        job = await asyncio.to_thread(train_voice, session, voice_id)
+        return {
+            "job_id": job.id,
+            "voice_id": voice_id,
+            "status": job.status,
+            "version": job.version,
+            "features": job.features,
+        }
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+
+
+@router.get("/{voice_id}/training")
+def voice_training_status(
+    voice_id: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    voice = session.get(Voice, voice_id)
+    if voice is None or (voice.owner_id != user.id and user.role != "admin"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Voice not found")
+    jobs = session.exec(
+        select(VoiceTrainingJob)
+        .where(VoiceTrainingJob.voice_id == voice_id)  # type: ignore[arg-type]
+        .order_by(VoiceTrainingJob.created_at.desc())  # type: ignore[union-attr]
+    ).all()
+    return {
+        "voice_id": voice_id,
+        "profile_version": voice.profile_version,
+        "adapted": bool(voice.profile_path),
+        "jobs": [
+            {
+                "id": j.id,
+                "status": j.status,
+                "version": j.version,
+                "features": j.features,
+                "error": j.error,
+                "created_at": j.created_at,
+            }
+            for j in jobs
+        ],
+    }

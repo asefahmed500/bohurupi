@@ -16,23 +16,24 @@ test.describe("chat", () => {
     await expect(page.getByRole("button", { name: "Record speech" }).first()).toBeVisible();
   });
 
-  test("sending a message with no LLM key surfaces an honest error and keeps the user message", async ({
+  test("sending a message returns a real streaming AI reply with audio", async ({
     page,
   }) => {
     await page
       .getByPlaceholder("Ask anything, in any language…")
-      .fill("Hello Bohurupi, this is an E2E test");
+      .fill("Say hello in one short sentence.");
     await page.keyboard.press("Enter");
 
     // the user's bubble appears immediately
     await expect(
-      page.getByText("Hello Bohurupi, this is an E2E test").first()
+      page.getByText("Say hello in one short sentence.").first()
     ).toBeVisible();
 
-    // without ZAI_API_KEY the backend streams an explicit error frame
+    // real LLM + TTS: the reply arrives with a playable audio bar
     await expect(
-      page.getByText(/AI engine is not configured/i).first()
-    ).toBeVisible({ timeout: 30_000 });
+      page.getByRole("button", { name: "Play" }).first()
+    ).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText("Preparing voice…")).toHaveCount(0, { timeout: 90_000 });
   });
 
   test("reply-language picker updates the label and persists the choice", async ({ page }) => {

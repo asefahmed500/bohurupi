@@ -35,6 +35,7 @@ class User(SQLModel, table=True):
 class Conversation(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
     user_id: str = Field(foreign_key="user.id", index=True)
+    business_id: str | None = Field(foreign_key="business.id", index=True, default=None)
     title: str = "New conversation"
     default_lang: str = "auto"  # "auto" or ISO code
     default_voice_id: str = ""
@@ -90,6 +91,8 @@ class Voice(SQLModel, table=True):
     status: str = "ready"  # ready | pending | moderation | rejected
     sample_path: str | None = None  # cloned sample (encrypted at rest)
     embedding_path: str | None = None
+    profile_path: str | None = None  # learned voice-adaptation profile
+    profile_version: int = 0
     created_at: datetime = Field(default_factory=_now)
 
     owner: User | None = Relationship(back_populates="voices")
@@ -135,3 +138,66 @@ class EngineState(SQLModel, table=True):
 
     name: str = Field(primary_key=True)
     enabled: bool = True
+
+
+class Business(SQLModel, table=True):
+    """Tenant for the customer-support agent (one business, many conversations)."""
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    name: str
+    slug: str = Field(index=True, unique=True)
+    system_prompt: str = "You are a concise, helpful customer-support agent."
+    languages: list[str] = Field(default_factory=lambda: ["en"], sa_column=Column(JSON))
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=_now)
+
+    documents: list["KnowledgeDocument"] = Relationship(back_populates="business")
+    tickets: list["SupportTicket"] = Relationship(back_populates="business")
+
+
+class KnowledgeDocument(SQLModel, table=True):
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    business_id: str = Field(foreign_key="business.id", index=True)
+    title: str
+    source: str = ""
+    content: str
+    created_at: datetime = Field(default_factory=_now)
+
+    business: Business = Relationship(back_populates="documents")
+    chunks: list["KnowledgeChunk"] = Relationship(back_populates="document")
+
+
+class KnowledgeChunk(SQLModel, table=True):
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    document_id: str = Field(foreign_key="knowledgedocument.id", index=True)
+    business_id: str = Field(foreign_key="business.id", index=True)
+    text: str
+    # hashed TF-IDF bag-of-words: {token: weight} — real lexical retrieval
+    embedding: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+    document: KnowledgeDocument = Relationship(back_populates="chunks")
+
+
+class SupportTicket(SQLModel, table=True):
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    business_id: str = Field(foreign_key="business.id", index=True)
+    conversation_id: str | None = Field(default=None, foreign_key="conversation.id", index=True)
+    customer_email: str = ""
+    subject: str
+    message: str
+    status: str = "open"  # open | escalated | closed
+    created_at: datetime = Field(default_factory=_now)
+
+    business: Business = Relationship(back_populates="tickets")
+
+
+class VoiceTrainingJob(SQLModel, table=True):
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    voice_id: str = Field(foreign_key="voice.id", index=True)
+    status: str = "queued"  # queued | running | ready | failed
+    version: int = 1
+    profile_path: str | None = None
+    features: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None

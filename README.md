@@ -89,11 +89,26 @@ docker-compose.yml   full stack
 
 - `/` — public landing page (pill nav, hero, demo card, features, CTA, footer)
 - `/login`, `/register`, `/forgot-password`, `/reset-password` — separate auth screens
-- `/chat`, `/voices`, `/voices/clone`, `/studio`, `/history`, `/settings`, `/admin` — app (auth required)
+- `/chat`, `/support`, `/voices`, `/voices/clone`, `/studio`, `/history`, `/settings`, `/admin` — app (auth required)
 
 In dev/staging, `/auth/demo-accounts` + `/auth/demo-login` seed a one-click demo account
 (`DEMO_EMAIL` / `DEMO_PASSWORD`); both return 404 in prod. Password reset sends via SMTP when
 configured; without SMTP the local dev flow surfaces a reset link on screen (prod fails honestly).
+
+## Customer support agent, MCP and voice training (v2)
+
+- `/support` — knowledge-grounded support chat for any configured business, in any language,
+  with LLM-driven human escalation that creates a real `SupportTicket`.
+- Admin → Businesses / Tickets — create a tenant, index documents (chunked + hashed TF-IDF
+  retrieval), manage escalations.
+- `POST /voices/{id}/train` — learns a voice-adaptation profile from consented samples;
+  a nightly ARQ cron job retrains every approved cloned voice (`profile_version` increases).
+  The adapter applies measured pitch/speed characteristics to synthesis; it is **voice
+  adaptation, not neural timbre cloning**, and the API reports the engine actually used.
+- MCP server at `/mcp` (Streamable HTTP, `X-MCP-API-Key` required when `MCP_API_KEY` is set)
+  exposes languages, voices, TTS, knowledge search, tickets and chat as real tools.
+- Set `MCP_SERVERS_JSON` to connect external MCP servers; their tools are exposed to the
+  LangGraph agent at runtime (`app/agent/mcp_tools.py`).
 
 ## Testing
 
@@ -110,6 +125,7 @@ Audit scripts against a running API on :8000:
 - `uv run python scripts/audit_ai_real.py` — full AI E2E against the real configured provider (chat, translation, re-speak, STT, voice-to-voice)
 - `uv run python scripts/audit_ai_nonllm.py` — real TTS/STT/consent verification without LLM calls
 - `uv run python scripts/audit_languages.py` — verifies all 55 languages, seeded voices, new-language TTS/translation/detection
+- `uv run python scripts/audit_v2.py` — support agent + RAG + tickets, MCP server/client, voice training and nightly self-improvement
 
 Web E2E: `cd web && npx playwright test` (expects web on :3300 + API on :8000; 22 scenarios).
 For stable runs use the production web build: `npm run build && npm run start -- --port 3300`.

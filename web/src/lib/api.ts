@@ -273,6 +273,57 @@ export async function transcribe(file: Blob, language?: string) {
   return (await res.json()) as { text: string; language: string; confidence: number };
 }
 
+// ---- support agent + voice training ----
+
+export const publicBusinesses = () =>
+  api<{ businesses: { slug: string; name: string }[] }>("/support/businesses/public");
+
+export const adminBusinesses = () =>
+  api<{ businesses: { id: string; name: string; slug: string; is_active: boolean }[] }>(
+    "/support/businesses"
+  );
+
+export const createBusiness = (body: {
+  name: string;
+  slug: string;
+  system_prompt?: string;
+  languages?: string[];
+}) => api<{ id: string; slug: string }>("/support/businesses", { method: "POST", body: JSON.stringify(body) });
+
+export const addKnowledgeDocument = (slug: string, body: { title: string; content: string; source?: string }) =>
+  api<{ id: string; chunks: number }>(`/support/businesses/${slug}/documents`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const adminTickets = () =>
+  api<{ tickets: { id: string; subject: string; status: string; customer_email: string; created_at: string }[] }>("/support/tickets");
+
+export const patchTicket = (id: string, status: string) =>
+  api<{ id: string; status: string }>(`/support/tickets/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+
+export const supportChat = (body: { business_slug: string; message: string; email?: string; conversation_id?: string }) =>
+  api<{ conversation_id: string; reply: string; ticket_id: string | null; knowledge_hits: number }>(
+    "/support/chat",
+    { method: "POST", body: JSON.stringify(body) }
+  );
+
+export const trainVoice = (id: string) =>
+  api<{ job_id: string; status: string; version: number; features: Record<string, number> | null }>(
+    `/voices/${id}/train`,
+    { method: "POST" }
+  );
+
+export const voiceTraining = (id: string) =>
+  api<{
+    profile_version: number;
+    adapted: boolean;
+    jobs: { id: string; status: string; version: number; error: string | null }[];
+  }>(`/voices/${id}/training`);
+
 // ---- admin ----
 
 export const adminEngines = () => api<{ engines: EngineStatus[] }>("/admin/engines");

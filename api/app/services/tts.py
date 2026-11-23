@@ -32,6 +32,7 @@ class SynthMeta:
     sample_rate: int = 0
     duration: float = 0.0
     watermark_id: str | None = None
+    adapted: bool = False
 
 
 async def synthesize_pcm(
@@ -51,6 +52,11 @@ async def synthesize_pcm(
     """
     registry = get_registry()
     picked = registry.pick(lang, voice_id)
+    # learned acoustic adaptation (never claims neural cloning)
+    from app.services.voice_profile import adaptation_params, load_profile
+
+    profile = load_profile(picked.voice.id) if picked.voice.id else None
+    adapt_speed, adapt_pitch = adaptation_params(profile)
 
     for _attempt in range(3):
         engine, voice = picked.engine, picked.voice
@@ -58,13 +64,17 @@ async def synthesize_pcm(
             produced = False
             last_chunk: AudioChunk | None = None
             async for chunk in engine.synthesize(
-                text, lang, voice.id, speed=speed, style=style
+                text,
+                lang,
+                voice.id,
+                speed=speed * adapt_speed,
+                style=style,
             ):
                 produced = True
                 last_chunk = chunk
                 pcm = chunk.pcm
-                if pitch_semitones:
-                    pcm = fx.pitch_shift(pcm, chunk.sample_rate, pitch_semitones)
+                if pitch_semitones or adapt_pitch:
+                    pcm = fx.pitch_shift(pcm, chunk.sample_rate, pitch_semitones + adapt_pitch)
                 if effect and effect not in ("clean", None, ""):
                     pcm = fx.apply_effect(pcm, chunk.sample_rate, effect)
                 yield AudioChunk(pcm=pcm, sample_rate=chunk.sample_rate)
@@ -76,6 +86,7 @@ async def synthesize_pcm(
             meta.native_voice_id = voice.native_voice_id
             meta.fallback_used = picked.fallback_used
             meta.sample_rate = last_chunk.sample_rate
+            meta.adapted = profile is not None
             return
         except NoEngineForLanguage:
             raise

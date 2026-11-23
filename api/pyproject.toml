@@ -38,6 +38,8 @@ dependencies = [
     "langgraph>=1.0,<2.0",
     "langsmith>=0.3",
     "langchain-tavily>=0.1",
+    # MCP (server + outbound client tools)
+    "mcp>=2.0",
 ]
 
 [project.optional-dependencies]

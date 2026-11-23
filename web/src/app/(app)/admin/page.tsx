@@ -8,6 +8,11 @@ import dynamic from "next/dynamic";
 import { toast } from "sonner";
 
 import {
+  addKnowledgeDocument,
+  adminBusinesses,
+  adminTickets,
+  createBusiness,
+  patchTicket,
   adminEngines,
   adminPendingVoices,
   adminModerate,
@@ -24,9 +29,13 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -70,21 +79,32 @@ export default function AdminPage() {
   const [stats, setStats] = React.useState<Awaited<ReturnType<typeof adminStats>> | null>(null);
   const [users, setUsers] = React.useState<AdminUser[] | null>(null);
   const [pending, setPending] = React.useState<Voice[]>([]);
+  const [bizName, setBizName] = React.useState("");
+  const [bizSlug, setBizSlug] = React.useState("");
+  const [docSlug, setDocSlug] = React.useState("");
+  const [docTitle, setDocTitle] = React.useState("");
+  const [docContent, setDocContent] = React.useState("");
+  const [businesses, setBusinesses] = React.useState<Awaited<ReturnType<typeof adminBusinesses>>["businesses"]>([]);
+  const [tickets, setTickets] = React.useState<Awaited<ReturnType<typeof adminTickets>>["tickets"]>([]);
 
   const loadAll = React.useCallback(async () => {
     try {
-      const [e, u, s, pv, usersRes] = await Promise.all([
+      const [e, u, s, pv, usersRes, bizRes, ticketRes] = await Promise.all([
         adminEngines(),
         adminUsage(30),
         adminStats(),
         adminPendingVoices(),
         adminUsers(),
+        adminBusinesses(),
+        adminTickets(),
       ]);
       setEngines(e.engines);
       setUsage(u);
       setStats(s);
       setPending(pv.voices);
       setUsers(usersRes.users);
+      setBusinesses(bizRes.businesses);
+      setTickets(ticketRes.tickets);
     } catch {
       toast.error("Could not load admin data");
     }
@@ -174,6 +194,8 @@ export default function AdminPage() {
             Moderation{pending.length > 0 ? ` (${pending.length})` : ""}
           </TabsTrigger>
           <TabsTrigger value="users">Users</TabsTrigger>
+          <TabsTrigger value="businesses">Businesses</TabsTrigger>
+          <TabsTrigger value="tickets">Tickets{tickets.length > 0 ? ` (${tickets.length})` : ""}</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -328,6 +350,137 @@ export default function AdminPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {new Date(u.created_at).toLocaleDateString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "businesses" && (
+        <div className="mt-6 grid gap-4 lg:grid-cols-2">
+          <Card className="bg-gradient-card">
+            <CardHeader>
+              <CardTitle className="text-base">New business</CardTitle>
+              <CardDescription>Creates a tenant with its own support agent and knowledge base.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <Input value={bizName} onChange={(e) => setBizName(e.target.value)} placeholder="Acme Support" aria-label="Business name" />
+              <Input value={bizSlug} onChange={(e) => setBizSlug(e.target.value)} placeholder="acme-support" aria-label="Business slug" />
+              <Button
+                className="w-full"
+                disabled={!bizName.trim() || !bizSlug.trim()}
+                onClick={() => {
+                  void createBusiness({ name: bizName, slug: bizSlug })
+                    .then(() => {
+                      toast.success("Business created");
+                      setBizName("");
+                      setBizSlug("");
+                      return loadAll();
+                    })
+                    .catch((e) => toast.error(e instanceof Error ? e.message : "Failed"));
+                }}
+              >
+                Create business
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-gradient-card">
+            <CardHeader>
+              <CardTitle className="text-base">Add knowledge</CardTitle>
+              <CardDescription>Documents are chunked and indexed for retrieval.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <Select value={docSlug} onValueChange={(v) => setDocSlug(String(v ?? ""))}>
+                <SelectTrigger aria-label="Knowledge business"><SelectValue placeholder="Choose business" /></SelectTrigger>
+                <SelectContent>
+                  {businesses.map((b) => (
+                    <SelectItem key={b.slug} value={b.slug}>{b.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input value={docTitle} onChange={(e) => setDocTitle(e.target.value)} placeholder="Refund policy" aria-label="Document title" />
+              <textarea
+                value={docContent}
+                onChange={(e) => setDocContent(e.target.value)}
+                placeholder="Paste policy text, FAQs, product details…"
+                aria-label="Document content"
+                className="min-h-32 w-full rounded-md border bg-background p-2 text-sm"
+              />
+              <Button
+                className="w-full"
+                disabled={!docSlug || !docTitle.trim() || docContent.trim().length < 10}
+                onClick={() => {
+                  void addKnowledgeDocument(docSlug, { title: docTitle, content: docContent })
+                    .then((res) => {
+                      toast.success(`Indexed ${res.chunks} chunk(s)`);
+                      setDocTitle("");
+                      setDocContent("");
+                    })
+                    .catch((e) => toast.error(e instanceof Error ? e.message : "Failed"));
+                }}
+              >
+                Index document
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-gradient-card lg:col-span-2">
+            <CardHeader><CardTitle className="text-base">Businesses</CardTitle></CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Slug</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {businesses.map((b) => (
+                    <TableRow key={b.id}>
+                      <TableCell>{b.name}</TableCell>
+                      <TableCell className="font-mono text-xs">{b.slug}</TableCell>
+                      <TableCell><Badge variant="outline">{b.is_active ? "active" : "inactive"}</Badge></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {tab === "tickets" && (
+        <Card className="bg-gradient-card mt-6 py-0">
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow><TableHead>Subject</TableHead><TableHead>Customer</TableHead><TableHead>Status</TableHead><TableHead>Created</TableHead></TableRow>
+              </TableHeader>
+              <TableBody>
+                {tickets.map((t) => (
+                  <TableRow key={t.id}>
+                    <TableCell className="max-w-64 truncate">{t.subject}</TableCell>
+                    <TableCell className="text-xs">{t.customer_email || "—"}</TableCell>
+                    <TableCell>
+                      <Select
+                        value={t.status}
+                        onValueChange={(v) =>
+                          void patchTicket(t.id, String(v))
+                            .then(() => loadAll())
+                            .catch(() => toast.error("Update failed"))
+                        }
+                      >
+                        <SelectTrigger size="sm" className="w-24 border-none shadow-none" aria-label={`Status for ${t.subject}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="open">open</SelectItem>
+                          <SelectItem value="escalated">escalated</SelectItem>
+                          <SelectItem value="closed">closed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {new Date(t.created_at).toLocaleDateString()}
                     </TableCell>
                   </TableRow>
                 ))}

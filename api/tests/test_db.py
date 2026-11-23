@@ -62,7 +62,7 @@ def test_user_email_unique_in_metadata():
 
 def test_fk_constraints_declared():
     expected = {
-        "conversation": {("user_id", "user", "id")},
+        "conversation": {("user_id", "user", "id"), ("business_id", "business", "id")},
         "message": {("conversation_id", "conversation", "id")},
         "audioasset": {("message_id", "message", "id"), ("user_id", "user", "id")},
         "voice": {("owner_id", "user", "id")},
@@ -114,7 +114,7 @@ def test_fk_nullability():
 def test_fk_columns_are_indexed(engine):
     expected = {
         "audioasset": {"message_id", "user_id"},
-        "conversation": {"user_id"},
+        "conversation": {"user_id", "business_id"},
         "message": {"conversation_id"},
         "usageevent": {"user_id"},
         "voice": {"owner_id"},
