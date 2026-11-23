@@ -107,7 +107,12 @@ configured; without SMTP the local dev flow surfaces a reset link on screen (pro
   adaptation, not neural timbre cloning**, and the API reports the engine actually used.
 - MCP server at `/mcp` (Streamable HTTP, `X-MCP-API-Key` required when `MCP_API_KEY` is set)
   exposes languages, voices, TTS, knowledge search, tickets and chat as real tools.
-- Set `MCP_SERVERS_JSON` to connect external MCP servers; their tools are exposed to the
+- Web search via free libraries (Wikipedia REST + DuckDuckGo, BeautifulSoup) is bound
+  into the agent automatically: `web_search`, `fetch_url`, `wikipedia_search` — no API key.
+- STT applies local MIT-licensed `noisereduce` spectral gating + high-pass filtering before
+  Whisper (`STT_DENOISE*`) so voices are heard in noisy/crowded rooms. If suppression leaves
+  no speech, recognition automatically retries the original audio.
+- `MCP_SERVERS_JSON` connects external MCP servers; their tools are exposed to the
   LangGraph agent at runtime (`app/agent/mcp_tools.py`).
 
 ## Testing

@@ -38,6 +38,9 @@ dependencies = [
     "langgraph>=1.0,<2.0",
     "langsmith>=0.3",
     "langchain-tavily>=0.1",
+    # Free internet tools (no API keys)
+    "duckduckgo-search>=6.0",
+    "beautifulsoup4>=4.12",
     # MCP (server + outbound client tools)
     "mcp>=2.0",
 ]
@@ -50,6 +53,7 @@ audio = [
     "numpy>=2.1",
     "soundfile>=0.12.1",
     "faster-whisper>=1.1",
+    "noisereduce>=3.0",  # free MIT spectral-gating noise suppression for STT
 ]
 # Studio effects + watermark (pulls torch; used in the full Docker profile)
 fx = [

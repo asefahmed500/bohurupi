@@ -43,7 +43,11 @@ class Settings(BaseSettings):
     # ---- TTS engines ----
     engine_order: str = "kokoro,edge"
     kokoro_auto_download: bool = True
+    # ---- Speech recognition ----
     whisper_model_size: str = "base"
+    stt_denoise: bool = True
+    stt_denoise_strength: float = 0.85
+    stt_denoise_stationary: bool = False
 
     # ---- Safety ----
     watermark_enabled: bool = True

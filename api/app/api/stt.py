@@ -20,6 +20,7 @@ router = APIRouter(tags=["stt"])
 async def speech_to_text(
     file: UploadFile = File(...),
     language: str | None = Form(None),
+    denoise: str | None = Form(None),
     user: User = Depends(get_current_user),
     _session=Depends(get_session),
 ):
@@ -40,19 +41,21 @@ async def speech_to_text(
     if len(data) < 512:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Audio file is too small")
 
-    result = await _run(data, language)
+    denoise_flag = None if denoise is None else denoise.lower() in ("1", "true", "yes", "on")
+    result = await _run(data, language, denoise_flag)
     return {
         "text": result.text,
         "language": result.language,
         "confidence": round(result.confidence, 3),
+        "denoised": result.denoised,
     }
 
 
-async def _run(data: bytes, language: str | None):
+async def _run(data: bytes, language: str | None, denoise: bool | None = None):
     import asyncio
 
     try:
-        return await asyncio.to_thread(transcribe, data, language)
+        return await asyncio.to_thread(transcribe, data, language, denoise)
     except Exception as e:
         logger.exception("STT failed")
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Speech recognition failed") from e

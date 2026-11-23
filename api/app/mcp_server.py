@@ -11,6 +11,7 @@ from mcp.server.mcpserver import MCPServer
 from sqlmodel import Session, select
 
 from app.agent.llm import get_llm, llm_ready
+from app.agent.web_tools import web_search as _web_search
 from app.db.models import Business, Conversation, Message, SupportTicket, User
 from app.db.session import engine
 from app.i18n import language_list
@@ -40,6 +41,11 @@ def create_mcp_server() -> MCPServer:
             "search, support tickets and chat."
         ),
     )
+
+    @server.tool()
+    def web_search(query: str, max_results: int = 3) -> list[dict]:
+        """Search the internet for current facts (Wikipedia + DuckDuckGo, no API key)."""
+        return _web_search(query, min(5, max(1, max_results)))
 
     @server.tool()
     def list_languages() -> list[dict]:
